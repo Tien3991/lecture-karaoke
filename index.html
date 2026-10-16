@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#000000">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Karaoke">
+<title>Lecture Karaoke: playback test</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icons/icon-180.png">
+<style>
+  :root { color-scheme: dark; --fg: #f2f2f2; --dim: #8c8c8c; --hi: #ffe000; }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: max(16px, env(safe-area-inset-top)) 16px 24px; background: #000; color: var(--fg);
+         font: 16px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; touch-action: manipulation; }
+  h1 { font-size: 20px; margin: 0 0 6px; }
+  p { color: var(--dim); margin: 0 0 14px; }
+  label.file { display: inline-block; padding: 10px 14px; border-radius: 10px; background: var(--hi); color: #000; font-weight: 600; }
+  label.file input { display: none; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; align-items: center; }
+  button { font: inherit; padding: 9px 13px; border-radius: 10px; border: 1px solid #333; background: #1a1a1a; color: var(--fg); }
+  button:active { background: #333; }
+  video { width: 100%; aspect-ratio: 16 / 9; background: #111; display: block; margin-top: 12px; border-radius: 6px; }
+  input[type=range] { width: 100%; accent-color: var(--hi); }
+  #time { font-variant-numeric: tabular-nums; color: var(--dim); }
+  #summary { margin: 12px 0; padding: 10px 12px; border-radius: 10px; background: #111; }
+  pre { white-space: pre-wrap; font: 12px/1.4 ui-monospace, Menlo, monospace; color: var(--dim); max-height: 40vh; overflow: auto; }
+  .ok { color: #7bd88f; } .bad { color: #ff6b6b; }
+</style>
+</head>
+<body>
+  <h1>Playback test</h1>
+  <p>Step 1 of the Lecture Karaoke app: checks that this device can play a large lecture video from
+     your files. On iPhone, add this page to the Home Screen first and open it from there. Pick the
+     largest video (the 738 MB Hugging Face tutorial) with <b>Choose File / Browse</b>, not the photo library.</p>
+
+  <label class="file">Choose video<input type="file" id="file" accept="video/mp4,.mp4,video/*"></label>
+  <div class="row">
+    <label><input type="checkbox" id="useSource"> play through a &lt;source&gt; element (fallback test)</label>
+  </div>
+
+  <video id="video" playsinline preload="metadata"></video>
+  <input type="range" id="seek" min="0" max="1000" value="0" step="1" aria-label="Position">
+  <div class="row">
+    <button id="play">Play</button>
+    <button id="back">−10 s</button>
+    <button id="fwd">+10 s</button>
+    <button id="end">Near the end</button>
+    <button id="speed">Speed 1×</button>
+    <span id="time">0:00 / 0:00</span>
+  </div>
+
+  <div id="summary">Checklist: ☐ plays ☐ jump near the end ☐ 2× ☐ switch apps and come back ☐ no stalls</div>
+  <pre id="log"></pre>
+
+<script src="spike.js"></script>
+</body>
+</html>

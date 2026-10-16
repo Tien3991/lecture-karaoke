@@ -1,0 +1,9 @@
+# Never publish media, transcripts or test fixtures: they stay on this computer.
+*.mp4
+*.mov
+*.json
+!manifest.webmanifest
+fixtures/
+test-media/
+node_modules/
+.DS_Store
