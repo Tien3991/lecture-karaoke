@@ -7,54 +7,105 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Karaoke">
-<title>Lecture Karaoke: playback test</title>
+<meta name="description" content="Plays your lecture videos with live karaoke subtitles from their Soniox transcripts. Files stay on your device.">
+<title>Lecture Karaoke</title>
 <link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon-192.png">
 <link rel="apple-touch-icon" href="icons/icon-180.png">
-<style>
-  :root { color-scheme: dark; --fg: #f2f2f2; --dim: #8c8c8c; --hi: #ffe000; }
-  * { box-sizing: border-box; }
-  body { margin: 0; padding: max(16px, env(safe-area-inset-top)) 16px 24px; background: #000; color: var(--fg);
-         font: 16px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; touch-action: manipulation; }
-  h1 { font-size: 20px; margin: 0 0 6px; }
-  p { color: var(--dim); margin: 0 0 14px; }
-  label.file { display: inline-block; padding: 10px 14px; border-radius: 10px; background: var(--hi); color: #000; font-weight: 600; }
-  label.file input { display: none; }
-  .row { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; align-items: center; }
-  button { font: inherit; padding: 9px 13px; border-radius: 10px; border: 1px solid #333; background: #1a1a1a; color: var(--fg); }
-  button:active { background: #333; }
-  video { width: 100%; aspect-ratio: 16 / 9; background: #111; display: block; margin-top: 12px; border-radius: 6px; }
-  input[type=range] { width: 100%; accent-color: var(--hi); }
-  #time { font-variant-numeric: tabular-nums; color: var(--dim); }
-  #summary { margin: 12px 0; padding: 10px 12px; border-radius: 10px; background: #111; }
-  pre { white-space: pre-wrap; font: 12px/1.4 ui-monospace, Menlo, monospace; color: var(--dim); max-height: 40vh; overflow: auto; }
-  .ok { color: #7bd88f; } .bad { color: #ff6b6b; }
-</style>
+<link rel="stylesheet" href="styles.css">
+<script type="module" src="app.js"></script>
 </head>
 <body>
-  <h1>Playback test</h1>
-  <p>Step 1 of the Lecture Karaoke app: checks that this device can play a large lecture video from
-     your files. On iPhone, add this page to the Home Screen first and open it from there. Pick the
-     largest video (the 738 MB Hugging Face tutorial) with <b>Choose File / Browse</b>, not the photo library.</p>
-
-  <label class="file">Choose video<input type="file" id="file" accept="video/mp4,.mp4,video/*"></label>
-  <div class="row">
-    <label><input type="checkbox" id="useSource"> play through a &lt;source&gt; element (fallback test)</label>
+<main id="welcome" class="welcome">
+  <h1>Lecture Karaoke</h1>
+  <p class="intro">Plays a lecture video with live karaoke subtitles from its transcript. Your files stay on this device; nothing is uploaded.</p>
+  <div class="pickers">
+    <label class="pick">
+      <input type="file" id="pickVideo" accept="video/mp4,.mp4,video/*">
+      <span class="pick-step">1</span>
+      <span><b>Video</b><br><span id="videoName" class="pick-name">Choose the lecture video</span></span>
+    </label>
+    <label class="pick">
+      <input type="file" id="pickJson" accept=".json,application/json">
+      <span class="pick-step">2</span>
+      <span><b>Transcript</b><br><span id="jsonName" class="pick-name">Choose its .json file</span></span>
+    </label>
   </div>
+  <p id="iosHint" class="hint" hidden>On iPhone and iPad, pick files with <b>Choose File</b> (the Files app), not the photo library. Add the app to the Home Screen to watch full screen.</p>
+  <p class="hint drop">You can also drop both files here.</p>
+  <div id="problems" class="problems" role="alert"></div>
+  <button id="startBtn" class="primary" disabled>Open</button>
+  <p class="foot"><a href="playback-test.html">Playback test</a> · <span id="version"></span></p>
+</main>
 
-  <video id="video" playsinline preload="metadata"></video>
-  <input type="range" id="seek" min="0" max="1000" value="0" step="1" aria-label="Position">
-  <div class="row">
-    <button id="play">Play</button>
-    <button id="back">−10 s</button>
-    <button id="fwd">+10 s</button>
-    <button id="end">Near the end</button>
-    <button id="speed">Speed 1×</button>
-    <span id="time">0:00 / 0:00</span>
+<div id="player" class="player" hidden>
+  <div class="video-box"><video id="video" playsinline preload="auto"></video></div>
+  <div id="panel" class="panel">
+    <div id="prev" class="ctx prev"></div>
+    <div id="cur" class="cur"></div>
+    <div id="next" class="ctx next"></div>
+    <div id="editNote" class="edit-note" hidden>Tap a word to fix it</div>
   </div>
+  <div class="bar">
+    <button id="playBtn" class="icon" aria-label="Play">▶︎</button>
+    <span id="time" class="time">0:00 / 0:00</span>
+    <input id="seek" type="range" min="0" max="1000" value="0" step="1" aria-label="Position">
+    <button id="speedBtn" class="chip" aria-label="Playback speed">1×</button>
+    <button id="leadBtn" class="chip" aria-label="Subtitle timing">Exact</button>
+    <button id="editBtn" class="chip" aria-pressed="false">Fix</button>
+    <button id="moreBtn" class="icon" aria-label="Settings">⋯</button>
+    <button id="fsBtn" class="icon" aria-label="Full screen">⛶</button>
+  </div>
+</div>
 
-  <div id="summary">Checklist: ☐ plays ☐ jump near the end ☐ 2× ☐ switch apps and come back ☐ no stalls</div>
-  <pre id="log"></pre>
+<dialog id="settings">
+  <form method="dialog">
+    <h2>Settings</h2>
+    <fieldset>
+      <legend>Subtitle timing</legend>
+      <label><input type="radio" name="lead" value="0"> Exact (with the voice)</label>
+      <label><input type="radio" name="lead" value="3000"> 3 s ahead of the voice</label>
+      <label><input type="radio" name="lead" value="custom"> Ahead by
+        <input type="number" id="leadCustom" min="0" max="15" step="0.5" value="5" inputmode="decimal"> s</label>
+    </fieldset>
+    <fieldset>
+      <legend>Sync fine-tune: <output id="syncOut">0 ms</output></legend>
+      <input type="range" id="sync" min="-300" max="300" step="10" value="0">
+      <p class="small">Moves every subtitle earlier (−) or later (+), if they look early or late on this device.
+        <span id="offsetInfo"></span></p>
+    </fieldset>
+    <fieldset>
+      <legend>Language</legend>
+      <select id="language"><option value="en">English</option><option value="vi">Tiếng Việt</option></select>
+      <p class="small">Used to choose natural places to split long sentences.</p>
+    </fieldset>
+    <fieldset>
+      <legend>Word fixes</legend>
+      <ul id="fixList" class="fix-list"></ul>
+      <button type="button" id="exportBtn">Export corrected transcript</button>
+      <p class="small">Saves a corrected .json (open it here next time) and a transcript.txt for the vertical_video_maker pipeline.</p>
+    </fieldset>
+    <div class="dialog-buttons">
+      <button type="button" id="openOther">Open other files</button>
+      <button value="close" class="primary">Done</button>
+    </div>
+  </form>
+</dialog>
 
-<script src="spike.js"></script>
+<dialog id="editor">
+  <form method="dialog">
+    <h2>Fix word</h2>
+    <p class="small" id="editorWhen"></p>
+    <input id="editorText" autocomplete="off" autocapitalize="off" spellcheck="false">
+    <p class="small">Leave empty to remove the word.</p>
+    <div class="dialog-buttons">
+      <button type="button" id="editorCancel">Cancel</button>
+      <button value="save" class="primary">Save</button>
+    </div>
+  </form>
+</dialog>
+
+<div id="toast" class="toast" role="status" hidden></div>
+<div id="updateBanner" class="update" hidden>A new version is ready. <button id="reloadBtn">Reload</button></div>
 </body>
 </html>
