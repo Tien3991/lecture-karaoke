@@ -6,7 +6,7 @@ import { blobReader, readMp4Info } from "./core/mp4.js";
 import { applyFixes, exportTranscript, setFix, transcriptText } from "./core/corrections.js";
 import * as store from "./core/store.js";
 
-const VERSION = "1.0.0";
+const VERSION = "1.0.1";
 // Proportions of the burned vertical video (identical in every pipeline calibration), in em of
 // the main subtitle text: line limit, frame width, and the height the three blocks need.
 const FIT_EM = 892.4 / 67.797, FRAME_EM = 1080 / 67.797, PANEL_EM = 14.4, CTX_SCALE = 74 / 93;

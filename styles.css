@@ -40,6 +40,7 @@ a { color: var(--fg); }
 .problems p { margin: 0 0 6px; } .problems p:last-child { margin: 0; }
 .welcome .primary { width: 100%; padding: 14px; font-size: 18px; margin-top: 6px; }
 body.dragging .welcome { outline: 3px dashed var(--hi); outline-offset: -10px; }
+@media (hover: none) and (pointer: coarse) { .drop { display: none; } }   /* phones and tablets can't drop files */
 
 /* ---------------------------------------------------------------- player: portrait = video on top */
 .player { position: fixed; inset: 0; display: grid; grid-template-columns: 100%; grid-template-rows: auto 1fr auto;
