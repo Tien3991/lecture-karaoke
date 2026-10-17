@@ -15,15 +15,17 @@ iPhone/iPad with Share → Add to Home Screen, to watch full screen and offline)
 
 | Control | |
 |---|---|
-| `1×` | playback speed, 0.5× to 2× (remembered) |
-| `Exact` / `3 s ahead` | show subtitles with the voice, or ahead of it (any lead in ⋯ Settings) |
+| `1×` | playback speed, 0.2× to 4×: type a value, pick a preset, or use the slider |
+| `Exact` / `+3 s` | switch between exact timing and the offset set in ⋯ Settings (+ before the voice, to read ahead; − after it) |
+| handle between video and subtitles | drag to resize them; portrait and landscape are kept separately (double-click, or ⋯ Settings → Automatic, to reset) |
 | `Fix` | tap a word to correct it; fixes are kept on the device |
-| `⋯` | settings: lead, sync fine-tune (±300 ms), language, the list of fixes, export |
-| keyboard | space play/pause, ←/→ 5 s, ↑/↓ speed, `L` lead, `E` fix, `F` full screen |
+| `⋯` | settings: timing offset, sync fine-tune (±300 ms), layout, language, the list of fixes, export |
+| keyboard | space play/pause, ←/→ 5 s, ↑/↓ preset speeds, `L` offset, `E` fix, `F` full screen |
 
-The app remembers, per transcript, where you stopped, your settings and your fixes. **Export
-corrected transcript** saves a corrected `.json` (open it here next time) and a `transcript.txt` in
-the vertical_video_maker correction format.
+The app remembers, per transcript, where you stopped, the sync fine-tune, the language and your
+fixes; speed, offset and layout are remembered on the device for every lecture. **Export corrected
+transcript** saves a corrected `.json` (open it here next time) and a `transcript.txt` in the
+vertical_video_maker correction format.
 
 ## Transcripts
 

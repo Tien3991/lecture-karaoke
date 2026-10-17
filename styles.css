@@ -42,23 +42,33 @@ a { color: var(--fg); }
 body.dragging .welcome { outline: 3px dashed var(--hi); outline-offset: -10px; }
 @media (hover: none) and (pointer: coarse) { .drop { display: none; } }   /* phones and tablets can't drop files */
 
-/* ---------------------------------------------------------------- player: portrait = video on top */
-.player { position: fixed; inset: 0; display: grid; grid-template-columns: 100%; grid-template-rows: auto 1fr auto;
+/* ---------------------------------------------------------------- player
+   Portrait: video on top, subtitles below. Landscape: video left, subtitles right. app.js sets
+   --video-size (the video's height in portrait, its width in landscape) from the viewer's split. */
+.player { position: fixed; inset: 0; display: grid; grid-template-columns: 100%;
+  grid-template-rows: var(--video-size, 56.25vw) minmax(0, 1fr) auto;
   padding: env(safe-area-inset-top) env(safe-area-inset-right) 0 env(safe-area-inset-left); background: var(--bg); }
 .player[hidden] { display: none; }
-.video-box { width: 100%; aspect-ratio: 16 / 9; background: #000; }
+.video-box { width: 100%; height: 100%; min-width: 0; min-height: 0; background: #000; }
 .video-box video { width: 100%; height: 100%; display: block; object-fit: contain; background: #000; }
-.panel { position: relative; overflow: hidden; min-height: 0; font-family: "LK Sans", Avenir Next, sans-serif; font-weight: 700;
+.panel { position: relative; overflow: hidden; min-width: 0; min-height: 0; font-family: "LK Sans", Avenir Next, sans-serif; font-weight: 700;
   user-select: none; -webkit-user-select: none; }
-
-/* landscape and desktop: video left, subtitles right; on phones (short screens) split about 50/50 */
 @media (orientation: landscape) {
-  .player { grid-template-columns: 60% 40%; grid-template-rows: 1fr auto; }
-  .video-box { grid-column: 1; grid-row: 1; align-self: center; }
+  .player { grid-template-columns: var(--video-size, 60%) minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) auto; }
+  .video-box { grid-column: 1; grid-row: 1; }
   .panel { grid-column: 2; grid-row: 1; }
   .bar { grid-column: 1 / -1; }
 }
-@media (orientation: landscape) and (max-height: 520px) { .player { grid-template-columns: 50% 50%; } }
+
+/* the handle between video and subtitles: along the panel's top edge, or its left edge in landscape */
+.splitter { position: absolute; z-index: 1; top: 0; left: 0; right: 0; height: 20px; cursor: row-resize; touch-action: none; }
+.splitter::after { content: ""; position: absolute; top: 6px; left: 50%; width: 44px; height: 4px; margin-left: -22px;
+  border-radius: 2px; background: #3a3a3a; }
+.splitter:hover::after, .splitter.dragging::after { background: var(--hi); }
+@media (orientation: landscape) {
+  .splitter { right: auto; bottom: 0; width: 20px; height: auto; cursor: col-resize; }
+  .splitter::after { top: 50%; left: 6px; width: 4px; height: 44px; margin: -22px 0 0; }
+}
 
 /* subtitle panel: the same proportions as the burned vertical video, in em of the main text */
 .cur, .ctx { position: absolute; left: 0; right: 0; text-align: center; white-space: nowrap; }
@@ -70,7 +80,6 @@ body.dragging .welcome { outline: 3px dashed var(--hi); outline-offset: -10px; }
 .next { top: calc(50% + var(--em) * 3.3335); }
 .w { cursor: pointer; border-radius: 4px; }
 .editing .w { text-decoration: underline dotted 2px; text-underline-offset: 0.18em; }
-.edit-note { position: absolute; top: 8px; left: 0; right: 0; text-align: center; color: var(--hi); font: 600 13px/1 -apple-system, sans-serif; }
 
 /* ---------------------------------------------------------------- control bar */
 .bar { display: flex; align-items: center; gap: 6px; padding: 8px 10px calc(8px + env(safe-area-inset-bottom)); background: #0b0b0b; border-top: 1px solid #1c1c1c; }
@@ -80,6 +89,7 @@ body.dragging .welcome { outline: 3px dashed var(--hi); outline-offset: -10px; }
 .bar input[type=range] { flex: 1; min-width: 60px; accent-color: var(--hi); }
 .time { font-variant-numeric: tabular-nums; font-size: 13px; color: var(--dim); white-space: nowrap; }
 @media (max-width: 430px) { .time { display: none; } .bar { gap: 4px; padding-left: 6px; padding-right: 6px; } .bar .chip { padding: 7px 8px; } }
+@media (max-width: 360px) { .bar .icon { min-width: 34px; padding: 8px 6px; } .bar .chip { padding: 7px 5px; font-size: 13px; } .bar input[type=range] { min-width: 40px; } }
 
 /* ---------------------------------------------------------------- dialogs, toast, update banner */
 dialog { width: min(480px, calc(100vw - 24px)); max-height: calc(100vh - 24px); border: 1px solid var(--line); border-radius: 16px; background: #111; color: var(--fg); padding: 18px; }
@@ -87,12 +97,24 @@ dialog::backdrop { background: rgba(0, 0, 0, 0.6); }
 dialog h2 { margin: 0 0 10px; font-size: 20px; }
 fieldset { border: 1px solid var(--line); border-radius: 12px; margin: 0 0 12px; padding: 10px 12px; }
 legend { padding: 0 6px; color: var(--dim); }
-fieldset label { display: block; padding: 4px 0; }
-#leadCustom { width: 64px; padding: 2px 6px; background: #000; border: 1px solid var(--line); border-radius: 6px; }
-#sync { width: 100%; accent-color: var(--hi); }
+input[type=range] { accent-color: var(--hi); }
+#sync, #split, #speedRange { width: 100%; }
 select, #editorText { width: 100%; padding: 10px; border-radius: 10px; border: 1px solid var(--line); background: #000; }
 #editorText { font: 700 22px "LK Sans", sans-serif; }
 .small { color: var(--dim); font-size: 13px; margin: 6px 0 0; }
+.small.top { margin: 0 0 8px; }
+.row { display: flex; gap: 10px; align-items: flex-start; justify-content: space-between; }
+.row button { flex: none; margin-top: 4px; }
+.stepper { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.stepper button { min-width: 44px; padding: 6px 10px; font-size: 20px; line-height: 1; }
+.stepper input, #speedNum { width: 84px; padding: 8px; border-radius: 10px; border: 1px solid var(--line); background: #000; text-align: center; font-size: 18px; }
+.speed-row { display: flex; align-items: center; gap: 10px; margin: 0 0 14px; }
+.speed-row select { flex: 1; width: auto; }
+.range-ends { position: relative; height: 20px; margin: 2px 10px 12px; color: var(--dim); font-size: 13px; }
+.range-ends span { position: absolute; top: 0; }
+.range-ends span:first-child { left: -10px; }
+.range-ends span:last-child { right: -10px; }
+.range-ends .one { left: 53.7%; transform: translateX(-50%); }   /* 1× on the logarithmic slider */
 .fix-list { list-style: none; margin: 0 0 8px; padding: 0; max-height: 30vh; overflow: auto; }
 .fix-list li { display: flex; justify-content: space-between; gap: 8px; padding: 4px 0; border-bottom: 1px solid #1c1c1c; }
 .fix-list li button { padding: 2px 8px; }

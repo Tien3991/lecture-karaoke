@@ -2,7 +2,7 @@
 // installed (Home Screen) app picks up new versions; other files come from the cache first.
 // Keep VERSION equal to app.js's VERSION and change both with every release: a new cache name is
 // what makes installed apps fetch the new files.
-const VERSION = "1.0.1";
+const VERSION = "1.1.0";
 const CACHE = `lecture-karaoke-${VERSION}`;
 const SHELL = ["./", "index.html", "styles.css", "app.js", "core/transcript.js", "core/layout.js", "core/timeline.js",
   "core/mp4.js", "core/corrections.js", "core/store.js", "manifest.webmanifest", "icons/icon-180.png", "icons/icon-192.png",

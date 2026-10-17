@@ -6,24 +6,49 @@ import { blobReader, readMp4Info } from "./core/mp4.js";
 import { applyFixes, exportTranscript, setFix, transcriptText } from "./core/corrections.js";
 import * as store from "./core/store.js";
 
-const VERSION = "1.0.1";
+const VERSION = "1.1.0";
 // Proportions of the burned vertical video (identical in every pipeline calibration), in em of
 // the main subtitle text: line limit, frame width, and the height the three blocks need.
 const FIT_EM = 892.4 / 67.797, FRAME_EM = 1080 / 67.797, PANEL_EM = 14.4, CTX_SCALE = 74 / 93;
 const FONT = '700 100px "LK Sans"';
-const SPEEDS = [1, 1.25, 1.5, 1.75, 2, 0.5, 0.75];
+const RATE_MIN = 0.2, RATE_MAX = 4;
+const RATE_PRESETS = [0.2, 0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2, 2.5, 3, 3.5, 4];
+const OFFSET_MAX_MS = 15000;
+// How much of the screen the video may take: of the height in portrait, of the width in landscape.
+const SPLIT_RANGE = { portrait: [0.15, 0.85], landscape: [0.25, 0.8] };
 const isFirefox = /Firefox\//.test(navigator.userAgent);
 const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
 const isMobile = isIOS || /Android/i.test(navigator.userAgent);
 const dev = ["localhost", "127.0.0.1"].includes(location.hostname);
 
 const $ = (id) => document.getElementById(id);
-const video = $("video"), panel = $("panel");
+const clamp = (x, lo, hi) => Math.min(hi, Math.max(lo, x));
+const video = $("video"), panel = $("panel"), player = $("player"), bar = document.querySelector(".bar");
 const S = {
   videoFile: null, jsonFile: null, videoUrl: null, videoName: "", transcript: null, id: null, rec: {},
   baseWords: [], words: [], pieces: [], events: [], durationMs: 0, audioOffsetMs: 0,
   leadMs: 0, syncMs: 0, language: "en", editing: false, shown: -2, spoken: -1, lastSecond: -1,
 };
+
+// ---------------------------------------------------------------- viewer preferences
+// Kept on this device for every lecture: speed, the timing offset and whether it is on, and the
+// video/subtitle split for each orientation. (Position, sync, language and fixes are kept per
+// transcript in IndexedDB.) The key carries the app prefix: all Pages projects share one origin.
+const PREFS_KEY = "lecture-karaoke.prefs";
+const prefs = { rate: 1, offsetMs: 3000, offsetOn: false, split: { portrait: null, landscape: null } };
+try {
+  const saved = JSON.parse(localStorage.getItem(PREFS_KEY) || "{}");
+  Object.assign(prefs, saved, { split: { ...prefs.split, ...saved.split } });
+  const oldRate = Number(localStorage.getItem("lecture-karaoke.rate"));   // 1.0.1 kept only the speed
+  if (oldRate && !("rate" in saved)) prefs.rate = oldRate;
+} catch { /* storage unavailable: defaults */ }
+prefs.rate = clamp(Number(prefs.rate) || 1, RATE_MIN, RATE_MAX);
+prefs.offsetMs = Number.isFinite(Number(prefs.offsetMs)) ? clamp(Number(prefs.offsetMs), -OFFSET_MAX_MS, OFFSET_MAX_MS) : 3000;
+prefs.offsetOn = prefs.offsetOn === true;
+for (const o of ["portrait", "landscape"]) if (!Number.isFinite(prefs.split[o])) prefs.split[o] = null;
+function savePrefs() {
+  try { localStorage.setItem(PREFS_KEY, JSON.stringify(prefs)); } catch { /* storage unavailable */ }
+}
 
 // ---------------------------------------------------------------- measuring text
 let ctx2d = null, widthScale = 1;
@@ -81,7 +106,7 @@ addEventListener("dragleave", (e) => { if (!e.relatedTarget) document.body.class
 addEventListener("drop", (e) => {
   e.preventDefault();
   document.body.classList.remove("dragging");
-  if (!$("player").hidden) return;
+  if (!player.hidden) return;
   for (const f of e.dataTransfer.files) {
     if (/\.json$/i.test(f.name) || f.type === "application/json") chooseJson(f);
     else if (f.type.startsWith("video/") || /\.(mp4|m4v|mov)$/i.test(f.name)) chooseVideo(f);
@@ -138,7 +163,8 @@ async function openPair(data, info, url, name, size) {
     // Soniox counts from the first audio sample; Safari and Chromium keep the MP4's leading empty
     // edit (the audio starts that much into the timeline), Firefox drops it.
     audioOffsetMs: isFirefox ? 0 : Math.round(info.audioStartSec * 1000),
-    leadMs: rec.leadMs ?? 0, syncMs: rec.syncMs ?? 0, language: rec.language ?? "en", shown: -2,
+    leadMs: prefs.offsetOn ? prefs.offsetMs : 0, syncMs: rec.syncMs ?? 0, language: rec.language ?? "en",
+    shown: -2, lastSecond: -1,
   });
   S.rec.video = { name, size };
   S.baseWords = wordsFromTranscript(data);
@@ -148,11 +174,12 @@ async function openPair(data, info, url, name, size) {
   if (S.videoUrl) URL.revokeObjectURL(S.videoUrl);
   S.videoUrl = url;
   video.src = url;
-  video.defaultPlaybackRate = video.playbackRate = savedRate();
+  applyRate(prefs.rate);
   $("welcome").hidden = true;
-  $("player").hidden = false;
+  player.hidden = false;
   document.title = `${name.replace(/\.[^.]+$/, "")} · Lecture Karaoke`;
   updateChips();
+  layout();
   resize();
   video.addEventListener("loadedmetadata", () => {
     if (rec.position > 5 && rec.position < video.duration - 10) {
@@ -163,7 +190,7 @@ async function openPair(data, info, url, name, size) {
   save();
 }
 
-// ---------------------------------------------------------------- layout and timing
+// ---------------------------------------------------------------- subtitle layout and timing
 function rebuildLayout() {
   widths.clear();
   const opts = { fitW: FIT_EM, conj: CONJ_BY_LANGUAGE[S.language] || new Set(), ctxScale: CTX_SCALE };
@@ -176,12 +203,74 @@ function rebuildEvents() {
   render();
 }
 
+/** The subtitle size: the burned video's proportions, as large as the panel allows. */
 function resize() {
   const r = panel.getBoundingClientRect();
   if (!r.width || !r.height) return;
   panel.style.setProperty("--em", `${Math.min(r.width / FRAME_EM, r.height / PANEL_EM)}px`);
 }
 new ResizeObserver(resize).observe(panel);
+
+// ---------------------------------------------------------------- screen split: video / subtitles
+const landscapeMQ = matchMedia("(orientation: landscape)");
+const orient = () => (landscapeMQ.matches ? "landscape" : "portrait");
+/** The space the video and the subtitles share (the player without the control bar), in px. */
+function area() {
+  const cs = getComputedStyle(player);
+  return {
+    w: player.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight),
+    h: player.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom) - bar.offsetHeight,
+  };
+}
+/** The video's share of that space: the viewer's choice, else the full width in portrait and
+ *  60% (50% on short screens) in landscape. */
+function videoShare(o = orient(), a = area()) {
+  const [lo, hi] = SPLIT_RANGE[o];
+  const auto = o === "landscape" ? (innerHeight <= 520 ? 0.5 : 0.6) : (a.w * 9) / 16 / a.h;
+  return clamp(prefs.split[o] ?? auto, lo, hi);
+}
+function layout() {
+  const a = area();
+  if (player.hidden || a.w <= 0 || a.h <= 0) return;
+  const o = orient();
+  player.style.setProperty("--video-size", `${Math.round(videoShare(o, a) * (o === "landscape" ? a.w : a.h))}px`);
+  if ($("settings").open) syncSplitControls();
+}
+new ResizeObserver(layout).observe(player);
+
+function setSplit(share) {
+  prefs.split[orient()] = share;
+  layout();
+}
+const splitter = $("splitter");
+splitter.addEventListener("pointerdown", (e) => {
+  if (e.button > 0) return;
+  e.preventDefault();
+  const o = orient(), a = area(), across = o === "landscape", [lo, hi] = SPLIT_RANGE[o];
+  const total = across ? a.w : a.h, from = across ? e.clientX : e.clientY, size = videoShare(o, a) * total;
+  const stop = new AbortController();
+  let moved = false;
+  splitter.setPointerCapture(e.pointerId);
+  splitter.classList.add("dragging");
+  splitter.addEventListener("pointermove", (ev) => {
+    const delta = (across ? ev.clientX : ev.clientY) - from;
+    moved ||= Math.abs(delta) > 3;
+    setSplit(clamp((size + delta) / total, lo, hi));
+  }, { signal: stop.signal });
+  const end = () => {
+    stop.abort();
+    splitter.classList.remove("dragging");
+    savePrefs();
+    if (!moved) return;
+    // A mouse released over the video would also "click" it (play/pause): swallow that click.
+    const swallow = (c) => { c.stopPropagation(); c.preventDefault(); };
+    addEventListener("click", swallow, { capture: true, once: true });
+    setTimeout(() => removeEventListener("click", swallow, { capture: true }), 0);
+  };
+  splitter.addEventListener("pointerup", end, { signal: stop.signal });
+  splitter.addEventListener("pointercancel", end, { signal: stop.signal });
+});
+splitter.addEventListener("dblclick", () => { setSplit(null); savePrefs(); });
 
 // ---------------------------------------------------------------- drawing
 function wordSpan(i, text) {
@@ -248,19 +337,6 @@ video.addEventListener("play", () => { $("playBtn").textContent = "❚❚"; $("p
 video.addEventListener("pause", () => { $("playBtn").textContent = "▶︎"; $("playBtn").ariaLabel = "Play"; keepAwake(false); save(); });
 video.addEventListener("click", togglePlay);
 $("seek").addEventListener("input", () => { if (video.duration) video.currentTime = ($("seek").value / 1000) * video.duration; });
-$("speedBtn").addEventListener("click", () => {
-  video.playbackRate = SPEEDS[(SPEEDS.indexOf(video.playbackRate) + 1) % SPEEDS.length];
-});
-// The speed is a viewer preference, kept across lectures (the key carries the app prefix).
-const RATE_KEY = "lecture-karaoke.rate";
-function savedRate() {
-  try { return SPEEDS.includes(Number(localStorage.getItem(RATE_KEY))) ? Number(localStorage.getItem(RATE_KEY)) : 1; } catch { return 1; }
-}
-video.addEventListener("ratechange", () => {
-  updateChips();
-  try { localStorage.setItem(RATE_KEY, String(video.playbackRate)); } catch { /* storage unavailable */ }
-});
-$("leadBtn").addEventListener("click", () => setLead(S.leadMs ? 0 : (S.rec.lastLeadMs || 3000)));
 $("editBtn").addEventListener("click", () => setEditing(!S.editing));
 $("moreBtn").addEventListener("click", openSettings);
 
@@ -272,33 +348,28 @@ $("fsBtn").addEventListener("click", () => {
   else (fsTarget.requestFullscreen || fsTarget.webkitRequestFullscreen).call(fsTarget);
 });
 
-function setLead(ms) {
-  S.leadMs = ms;
-  if (ms) S.rec.lastLeadMs = ms;
-  rebuildEvents();
-  updateChips();
-  save();
-}
 function setEditing(on) {
   S.editing = on;
   panel.classList.toggle("editing", on);
-  $("editNote").hidden = !on;
   $("editBtn").setAttribute("aria-pressed", String(on));
-  if (on) video.pause();
+  if (on) { video.pause(); toast("Tap a word to fix it"); }
 }
+const fmtRate = (r) => `${+r.toFixed(2)}×`;
+const fmtOffset = (ms) => `${ms > 0 ? "+" : ms < 0 ? "−" : "±"}${+Math.abs(ms / 1000).toFixed(2)} s`;
 function updateChips() {
-  $("speedBtn").textContent = `${video.playbackRate}×`;
-  $("leadBtn").textContent = S.leadMs ? `${S.leadMs / 1000} s ahead` : "Exact";
+  $("speedBtn").textContent = fmtRate(video.playbackRate);
+  $("leadBtn").textContent = prefs.offsetOn ? fmtOffset(prefs.offsetMs) : "Exact";
+  $("leadBtn").setAttribute("aria-pressed", String(prefs.offsetOn));
 }
 
 addEventListener("keydown", (e) => {
-  if ($("player").hidden || e.target.closest("input, select, textarea, dialog")) return;
+  if (player.hidden || e.target.closest("input, select, textarea, dialog")) return;
   const k = e.key.toLowerCase();
   if (k === " ") { e.preventDefault(); togglePlay(); }
   else if (k === "arrowleft") video.currentTime = Math.max(0, video.currentTime - 5);
   else if (k === "arrowright") video.currentTime = Math.min(video.duration || 0, video.currentTime + 5);
-  else if (k === "arrowup" || k === "]") video.playbackRate = Math.min(2, video.playbackRate + 0.25);
-  else if (k === "arrowdown" || k === "[") video.playbackRate = Math.max(0.5, video.playbackRate - 0.25);
+  else if (k === "arrowup" || k === "]") stepRate(1);
+  else if (k === "arrowdown" || k === "[") stepRate(-1);
   else if (k === "l") $("leadBtn").click();
   else if (k === "e") $("editBtn").click();
   else if (k === "f" && canFullscreen) $("fsBtn").click();
@@ -314,6 +385,88 @@ panel.addEventListener("click", (e) => {
   if (S.editing) { openEditor(i); return; }
   const w = S.words[i];
   video.currentTime = Math.max(0, w.start + S.audioOffsetMs + S.syncMs - S.leadMs + 10) / 1000;
+});
+
+// ---------------------------------------------------------------- speed (0.2× to 4×)
+/** Sets the speed, or says so and returns false when this browser refuses it. */
+function applyRate(r) {
+  r = Math.round(clamp(r, RATE_MIN, RATE_MAX) * 100) / 100;
+  try {
+    video.defaultPlaybackRate = r;
+    video.playbackRate = r;
+  } catch {
+    toast(`This browser can't play at ${fmtRate(r)}.`);
+    return false;
+  }
+  prefs.rate = r;
+  savePrefs();
+  return true;
+}
+// The slider is logarithmic, so it is as fine around 1× as at the ends; it snaps to 0.05.
+const SLIDER_STEPS = 1000;
+const toSlider = (r) => Math.round((Math.log(r / RATE_MIN) / Math.log(RATE_MAX / RATE_MIN)) * SLIDER_STEPS);
+const fromSlider = (v) => Math.round(RATE_MIN * (RATE_MAX / RATE_MIN) ** (v / SLIDER_STEPS) * 20) / 20;
+$("speedPreset").append(new Option("Custom", ""), ...RATE_PRESETS.map((r) => new Option(fmtRate(r), String(r))));
+let sliding = false;   // while a finger or mouse drags the slider, don't move its thumb under it
+function syncSpeedControls() {
+  const r = video.playbackRate;
+  if (document.activeElement !== $("speedNum")) $("speedNum").value = +r.toFixed(2);
+  if (!sliding) $("speedRange").value = toSlider(r);
+  $("speedPreset").value = RATE_PRESETS.includes(r) ? String(r) : "";
+}
+$("speedRange").addEventListener("pointerdown", () => (sliding = true));
+for (const ev of ["pointerup", "pointercancel"]) addEventListener(ev, () => { if (sliding) { sliding = false; syncSpeedControls(); } });
+$("speedBtn").addEventListener("click", () => { syncSpeedControls(); $("speedDialog").showModal(); });
+$("speedRange").addEventListener("input", () => applyRate(fromSlider(Number($("speedRange").value))));
+// Keyboard on the slider: arrows step 0.05×, Page Up/Down jump to the next preset.
+$("speedRange").addEventListener("keydown", (e) => {
+  const step = { ArrowRight: 0.05, ArrowUp: 0.05, ArrowLeft: -0.05, ArrowDown: -0.05 }[e.key];
+  if (step) applyRate(video.playbackRate + step);
+  else if (e.key === "PageUp" || e.key === "PageDown") stepRate(e.key === "PageUp" ? 1 : -1);
+  else return;
+  e.preventDefault();
+});
+$("speedNum").addEventListener("change", () => {
+  const r = parseFloat($("speedNum").value);
+  if (Number.isFinite(r)) applyRate(r);
+  $("speedNum").value = +video.playbackRate.toFixed(2);
+});
+$("speedPreset").addEventListener("change", () => { if ($("speedPreset").value) applyRate(Number($("speedPreset").value)); });
+$("speedNormal").addEventListener("click", () => applyRate(1));
+video.addEventListener("ratechange", () => { updateChips(); syncSpeedControls(); });
+/** Keyboard: the next preset speed up (+1) or down (-1). */
+function stepRate(dir) {
+  const r = video.playbackRate;
+  const next = dir > 0 ? RATE_PRESETS.find((p) => p > r + 1e-9) : RATE_PRESETS.findLast((p) => p < r - 1e-9);
+  if (next) applyRate(next);
+}
+
+// ---------------------------------------------------------------- timing offset
+// The Exact button switches between exact timing and one offset set in the settings:
+// + shows the subtitles before the voice (to read ahead), - after it.
+function setOffset(ms = prefs.offsetMs, on = prefs.offsetOn) {
+  prefs.offsetMs = clamp(Math.round(ms / 100) * 100, -OFFSET_MAX_MS, OFFSET_MAX_MS);
+  prefs.offsetOn = on;
+  savePrefs();
+  S.leadMs = on ? prefs.offsetMs : 0;
+  rebuildEvents();
+  updateChips();
+  syncOffsetControls();
+}
+function syncOffsetControls() {
+  if (document.activeElement !== $("offset")) $("offset").value = +(prefs.offsetMs / 1000).toFixed(2);
+  const s = +Math.abs(prefs.offsetMs / 1000).toFixed(2);
+  $("offsetSays").textContent = prefs.offsetMs > 0 ? `Subtitles ${s} s before the voice, to read ahead. − puts them after it.`
+    : prefs.offsetMs < 0 ? `Subtitles ${s} s after the voice. + puts them before it.`
+    : "Same as exact. + puts the subtitles before the voice, − after it.";
+}
+$("leadBtn").addEventListener("click", () => setOffset(prefs.offsetMs, !prefs.offsetOn));
+$("offsetDown").addEventListener("click", () => setOffset(prefs.offsetMs - 500));
+$("offsetUp").addEventListener("click", () => setOffset(prefs.offsetMs + 500));
+$("offset").addEventListener("change", () => {
+  const s = parseFloat($("offset").value);
+  if (Number.isFinite(s)) setOffset(s * 1000);
+  $("offset").value = +(prefs.offsetMs / 1000).toFixed(2);
 });
 
 // ---------------------------------------------------------------- fixing words
@@ -343,9 +496,8 @@ function applyAndRelayout() {
 
 // ---------------------------------------------------------------- settings
 function openSettings() {
-  const lead = S.leadMs === 0 ? "0" : S.leadMs === 3000 ? "3000" : "custom";
-  document.querySelector(`input[name=lead][value="${lead}"]`).checked = true;
-  if (lead === "custom") $("leadCustom").value = S.leadMs / 1000;
+  syncOffsetControls();
+  syncSplitControls();
   $("sync").value = S.syncMs;
   $("syncOut").textContent = `${S.syncMs > 0 ? "+" : ""}${S.syncMs} ms`;
   $("language").value = S.language;
@@ -354,13 +506,17 @@ function openSettings() {
   drawFixList();
   $("settings").showModal();
 }
-for (const r of document.querySelectorAll("input[name=lead]")) {
-  r.addEventListener("change", () => setLead(r.value === "custom" ? Math.round(Number($("leadCustom").value) * 1000) : Number(r.value)));
+function syncSplitControls() {
+  const o = orient(), [lo, hi] = SPLIT_RANGE[o], share = videoShare();
+  Object.assign($("split"), { min: lo * 100, max: hi * 100 });
+  $("split").value = Math.round(share * 100);
+  $("splitLabel").textContent = `Video area (${o})`;
+  $("splitOut").textContent = `${Math.round(share * 100)}% of the ${o === "landscape" ? "width" : "height"}` +
+    (prefs.split[o] == null ? " · auto" : "");
 }
-$("leadCustom").addEventListener("change", () => {
-  document.querySelector('input[name=lead][value="custom"]').checked = true;
-  setLead(Math.max(0, Math.round(Number($("leadCustom").value) * 1000)));
-});
+$("split").addEventListener("input", () => setSplit(Number($("split").value) / 100));
+$("split").addEventListener("change", savePrefs);
+$("splitReset").addEventListener("click", () => { setSplit(null); savePrefs(); });
 $("sync").addEventListener("input", () => {
   S.syncMs = Number($("sync").value);
   $("syncOut").textContent = `${S.syncMs > 0 ? "+" : ""}${S.syncMs} ms`;
@@ -372,7 +528,7 @@ $("openOther").addEventListener("click", () => {
   $("settings").close();
   video.pause();
   save();
-  $("player").hidden = true;
+  player.hidden = true;
   $("welcome").hidden = false;
   document.title = "Lecture Karaoke";
   $("startBtn").disabled = !(S.videoFile && S.jsonFile);
@@ -416,7 +572,9 @@ let toastTimer = 0;
 function save() {
   if (!S.id) return;
   S.rec.position = video.currentTime || S.rec.position || 0;
-  Object.assign(S.rec, { leadMs: S.leadMs, syncMs: S.syncMs, language: S.language });
+  Object.assign(S.rec, { syncMs: S.syncMs, language: S.language });
+  delete S.rec.leadMs;        // 1.0.x kept the lead per transcript; it is a viewer preference now
+  delete S.rec.lastLeadMs;
   store.save(S.id, structuredClone(S.rec));
 }
 setInterval(() => { if (!video.paused) save(); }, 5000);
@@ -479,7 +637,7 @@ if (dev) {
         { headers: { Range: `bytes=${offset}-${offset + length - 1}` } })).arrayBuffer());
       const info = await readMp4Info(read, size);
       await openPair(data, info, vurl, decodeURIComponent(vurl.split("/").pop()), size);
-      window.__lk = { S, video, activeEvent, spokenCount };   // for automated checks
+      window.__lk = { S, video, prefs, activeEvent, spokenCount };   // for automated checks
     })().catch((err) => setProblems([`Dev open failed: ${err.message}`]));
   }
 }

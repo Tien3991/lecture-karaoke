@@ -134,3 +134,19 @@ test("word fixes: change, delete, re-edit, undo; the exported JSON reopens with 
   assert.equal(exported.corrections.length, 3, "earlier corrections plus the app's fixes");
   assert.equal(transcriptText(words), "Hello World.\nokay.\n");
 });
+
+test("timing offset: + shows every subtitle earlier, - later, by exactly the offset", () => {
+  const m = { word: (t) => t.length * 0.55, space: 0.25 };
+  const words = [["Hello", 1000, 1400], ["world.", 1500, 2000], ["Next", 5000, 5300], ["one.", 5400, 6000]]
+    .map(([text, start, end]) => ({ text, start, end }));
+  const pieces = buildPieces(words, m, { fitW: 13.16, conj: CONJ_BY_LANGUAGE.en, ctxScale: 74 / 93 });
+  const at = (leadMs) => buildEvents(pieces, { leadMs, durationMs: 60000, shiftMs: 0 });
+  const exact = at(0), late = at(-2000), early = at(2000);
+  assert.equal(exact.length, 2);
+  exact.forEach((e, i) => {
+    for (const k of ["start_cs", "end_cs", "last_word_end_cs"]) assert.equal(late[i][k], e[k] + 200, `${k} -2 s`);
+    assert.deepEqual(late[i].word_cs, e.word_cs.map((c) => c + 200));
+  });
+  assert.deepEqual(early[1].word_cs, exact[1].word_cs.map((c) => c - 200), "+2 s");
+  assert.equal(early[0].start_cs, 0, "times before the video starts are clamped to 0");
+});

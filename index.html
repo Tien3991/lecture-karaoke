@@ -44,14 +44,14 @@
     <div id="prev" class="ctx prev"></div>
     <div id="cur" class="cur"></div>
     <div id="next" class="ctx next"></div>
-    <div id="editNote" class="edit-note" hidden>Tap a word to fix it</div>
+    <div id="splitter" class="splitter" title="Drag to resize the video and the subtitles (double-click: automatic)"></div>
   </div>
   <div class="bar">
     <button id="playBtn" class="icon" aria-label="Play">▶︎</button>
     <span id="time" class="time">0:00 / 0:00</span>
     <input id="seek" type="range" min="0" max="1000" value="0" step="1" aria-label="Position">
-    <button id="speedBtn" class="chip" aria-label="Playback speed">1×</button>
-    <button id="leadBtn" class="chip" aria-label="Subtitle timing">Exact</button>
+    <button id="speedBtn" class="chip" aria-label="Playback speed" aria-haspopup="dialog">1×</button>
+    <button id="leadBtn" class="chip" aria-pressed="false" aria-label="Subtitle timing: exact, or the offset set in Settings">Exact</button>
     <button id="editBtn" class="chip" aria-pressed="false">Fix</button>
     <button id="moreBtn" class="icon" aria-label="Settings">⋯</button>
     <button id="fsBtn" class="icon" aria-label="Full screen">⛶</button>
@@ -63,16 +63,27 @@
     <h2>Settings</h2>
     <fieldset>
       <legend>Subtitle timing</legend>
-      <label><input type="radio" name="lead" value="0"> Exact (with the voice)</label>
-      <label><input type="radio" name="lead" value="3000"> 3 s ahead of the voice</label>
-      <label><input type="radio" name="lead" value="custom"> Ahead by
-        <input type="number" id="leadCustom" min="0" max="15" step="0.5" value="5" inputmode="decimal"> s</label>
+      <p class="small top">The <b>Exact</b> button switches between exact timing and this offset:</p>
+      <div class="stepper">
+        <button type="button" id="offsetDown" aria-label="Subtitles half a second later">−</button>
+        <input type="number" id="offset" min="-15" max="15" step="0.5" aria-label="Offset in seconds">
+        <span>s</span>
+        <button type="button" id="offsetUp" aria-label="Subtitles half a second earlier">+</button>
+      </div>
+      <p class="small" id="offsetSays"></p>
     </fieldset>
     <fieldset>
       <legend>Sync fine-tune: <output id="syncOut">0 ms</output></legend>
       <input type="range" id="sync" min="-300" max="300" step="10" value="0">
       <p class="small">Moves every subtitle earlier (−) or later (+), if they look early or late on this device.
         <span id="offsetInfo"></span></p>
+    </fieldset>
+    <fieldset>
+      <legend>Layout</legend>
+      <div class="row"><label for="split" id="splitLabel">Video area</label><output id="splitOut"></output></div>
+      <input type="range" id="split" min="15" max="85" step="1">
+      <div class="row"><p class="small">Portrait and landscape are set separately. You can also drag the handle between the video and the subtitles.</p>
+        <button type="button" id="splitReset">Automatic</button></div>
     </fieldset>
     <fieldset>
       <legend>Language</legend>
@@ -87,6 +98,23 @@
     </fieldset>
     <div class="dialog-buttons">
       <button type="button" id="openOther">Open other files</button>
+      <button value="close" class="primary">Done</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="speedDialog">
+  <form method="dialog">
+    <h2>Playback speed</h2>
+    <div class="speed-row">
+      <input type="number" id="speedNum" min="0.2" max="4" step="0.05" inputmode="decimal" aria-label="Speed (0.2 to 4)">
+      <span>×</span>
+      <select id="speedPreset" aria-label="Preset speeds"></select>
+    </div>
+    <input type="range" id="speedRange" min="0" max="1000" step="1" aria-label="Speed slider" autofocus>
+    <div class="range-ends" aria-hidden="true"><span>0.2×</span><span class="one">1×</span><span>4×</span></div>
+    <div class="dialog-buttons">
+      <button type="button" id="speedNormal">Normal</button>
       <button value="close" class="primary">Done</button>
     </div>
   </form>
