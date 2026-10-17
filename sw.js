@@ -5,7 +5,7 @@
 // "new version" banner, and Reload opens the new release.
 // VERSION must equal app.js's VERSION and index.html's app-version (npm test checks this); change
 // all three with every release: the new cache name is what makes installed apps fetch new files.
-const VERSION = "1.2.0";
+const VERSION = "1.3.0";
 const CACHE = `lecture-karaoke-${VERSION}`;
 const SHELL = ["./", "index.html", "styles.css", "app.js", "core/transcript.js", "core/layout.js", "core/timeline.js",
   "core/mp4.js", "core/corrections.js", "core/store.js", "core/github.js", "core/sync.js", "manifest.webmanifest", "icons/icon-180.png", "icons/icon-192.png",

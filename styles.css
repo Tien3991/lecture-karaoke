@@ -58,7 +58,6 @@ body.dragging .welcome { outline: 3px dashed var(--hi); outline-offset: -10px; }
   padding: env(safe-area-inset-top) env(safe-area-inset-right) 0 env(safe-area-inset-left); background: var(--bg); }
 .player[hidden] { display: none; }
 .video-box { position: relative; width: 100%; height: 100%; min-width: 0; min-height: 0; background: #000; }
-.video-box, .panel { touch-action: none; }   /* two-finger gestures instead of zooming (app.js) */
 .flash { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); padding: 10px 18px; border-radius: 14px;
   background: rgba(0, 0, 0, 0.65); color: #fff; font: 600 26px/1.2 -apple-system, BlinkMacSystemFont, sans-serif;
   white-space: nowrap; opacity: 0; transition: opacity 0.25s; pointer-events: none; }
@@ -94,15 +93,32 @@ body.dragging .welcome { outline: 3px dashed var(--hi); outline-offset: -10px; }
 .w { cursor: pointer; border-radius: 4px; }
 .editing .w { text-decoration: underline dotted 2px; text-underline-offset: 0.18em; }
 
-/* ---------------------------------------------------------------- control bar */
-.bar { display: flex; align-items: center; gap: 6px; padding: 8px 10px calc(8px + env(safe-area-inset-bottom)); background: #0b0b0b; border-top: 1px solid #1c1c1c; }
+/* ---------------------------------------------------------------- control bar: two rows, arranged by the viewer */
+.bar { display: flex; flex-direction: column; gap: 6px; padding: 6px 10px calc(8px + env(safe-area-inset-bottom)); background: #0b0b0b; border-top: 1px solid #1c1c1c; }
+.bar-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px; }
+.bar-row:empty { display: none; }
 .bar .icon { min-width: 42px; padding: 8px 10px; }
+.bar .play { min-width: 54px; font-size: 18px; }
+.bar .back { font-size: 24px; line-height: 1; padding: 5px 12px 7px; }
 .bar .chip { padding: 7px 10px; font-size: 14px; white-space: nowrap; }
 .bar .chip[aria-pressed="true"] { background: var(--hi); color: #000; border-color: var(--hi); }
-.bar input[type=range] { flex: 1; min-width: 60px; accent-color: var(--hi); }
+.progress { flex: 1 1 160px; display: flex; align-items: center; gap: 8px; min-width: 0; }
+.progress input[type=range] { flex: 1; min-width: 60px; accent-color: var(--hi); }
 .time { font-variant-numeric: tabular-nums; font-size: 13px; color: var(--dim); white-space: nowrap; }
-@media (max-width: 430px) { .time { display: none; } .bar { gap: 4px; padding-left: 6px; padding-right: 6px; } .bar .chip { padding: 7px 8px; } }
-@media (max-width: 360px) { .bar .icon { min-width: 34px; padding: 8px 6px; } .bar .chip { padding: 7px 5px; font-size: 13px; } .bar input[type=range] { min-width: 40px; } }
+@media (max-width: 430px) { .bar { padding-left: 6px; padding-right: 6px; } .bar-row { gap: 4px; } .bar .icon { min-width: 36px; padding: 8px 4px; } .bar .chip { padding: 7px 6px; } }
+@media (max-width: 360px) { .bar .icon { min-width: 32px; padding: 8px 4px; } .bar .chip { padding: 7px 4px; font-size: 13px; } .bar .play { min-width: 44px; } }
+
+/* arranging: tap a part of the bar to select it, then move it with the panel's buttons */
+.arrange { display: grid; gap: 8px; padding: 4px 0 8px; border-bottom: 1px solid #222; }
+.arrange[hidden], .arrange-hidden[hidden] { display: none; }
+.arrange-hint { margin: 0; font-size: 14px; }
+.arrange-moves { display: flex; flex-wrap: wrap; gap: 6px; }
+.arrange-moves button { flex: 1 1 auto; padding: 8px 10px; }
+.arrange-hidden { margin: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; color: var(--dim); font-size: 13px; }
+.arrange-hidden .chip { padding: 5px 9px; font-size: 13px; }
+.arranging .bar-row > * { outline: 1px dashed #555; outline-offset: 2px; }
+.arranging .bar-row > .selected { outline: 2px solid var(--hi); }
+.arranging .bar-row input { pointer-events: none; }
 
 /* ---------------------------------------------------------------- dialogs, toast, update banner */
 dialog { width: min(480px, calc(100vw - 24px)); max-height: calc(100vh - 24px); border: 1px solid var(--line); border-radius: 16px; background: #111; color: var(--fg); padding: 18px; }

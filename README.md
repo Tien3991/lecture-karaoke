@@ -18,14 +18,21 @@ iPhone/iPad with Share → Add to Home Screen, to watch full screen and offline)
 Recent lectures are listed on the start screen with where you stopped. A browser can't reopen a
 file by itself, so tapping one opens the file picker (its Recents has the video).
 
+The control bar has two rows: by default the progress bar on top, and the buttons below. ⋯
+Settings → *Arrange the buttons* lets you move any button left or right or to the other row, or
+hide it (tap a button, then move it); the arrangement is kept on the device.
+
 | Control | |
 |---|---|
-| two-finger tap / swipe | play/pause / back or forward 10 s (on the video and the subtitles) |
+| `‹` | back to the start screen |
+| `−5s` / `+5s` | back / forward 5 seconds |
+| `▶︎` | play / pause (tapping the video does too) |
 | `1×` | playback speed, 0.2× to 4×: type a value, pick a preset, or use the slider |
 | `Exact` / `+3 s` | switch between exact timing and the offset set in ⋯ Settings (+ before the voice, to read ahead; − after it) |
-| handle between video and subtitles | drag to resize them; portrait and landscape are kept separately (double-click, or ⋯ Settings → Automatic, to reset) |
 | `Fix` | tap a word to correct it (synced through GitHub when connected) |
-| `⋯` | settings: timing offset, sync fine-tune (±300 ms), layout, GitHub, language, the list of fixes, export |
+| `⋯` | settings: timing offset, sync fine-tune (±300 ms), layout, control bar, GitHub, language, the list of fixes, export |
+| `⛶` | full screen, where the browser allows it (not iPhone) |
+| handle between video and subtitles | drag to resize them; portrait and landscape are kept separately (double-click, or ⋯ Settings → Automatic, to reset) |
 | keyboard | space play/pause, ←/→ 5 s, ↑/↓ preset speeds, `L` offset, `E` fix, `F` full screen |
 
 The app remembers, per transcript, where you stopped, the sync fine-tune, the language and your

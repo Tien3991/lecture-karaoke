@@ -8,7 +8,7 @@ import { GitHub } from "./core/github.js";
 import { applyDeltas, deltaFor, sameFixes } from "./core/sync.js";
 import * as store from "./core/store.js";
 
-const VERSION = "1.2.0";
+const VERSION = "1.3.0";
 // Proportions of the burned vertical video (identical in every pipeline calibration), in em of
 // the main subtitle text: line limit, frame width, and the height the three blocks need.
 const FIT_EM = 892.4 / 67.797, FRAME_EM = 1080 / 67.797, PANEL_EM = 14.4, CTX_SCALE = 74 / 93;
@@ -52,7 +52,7 @@ const S = {
 // video/subtitle split for each orientation. (Position, sync, language and fixes are kept per
 // transcript in IndexedDB.) The key carries the app prefix: all Pages projects share one origin.
 const PREFS_KEY = "lecture-karaoke.prefs";
-const prefs = { rate: 1, offsetMs: 3000, offsetOn: false, split: { portrait: null, landscape: null } };
+const prefs = { rate: 1, offsetMs: 3000, offsetOn: false, split: { portrait: null, landscape: null }, bar: null };
 try {
   const saved = JSON.parse(localStorage.getItem(PREFS_KEY) || "{}");
   Object.assign(prefs, saved, { split: { ...prefs.split, ...saved.split } });
@@ -419,6 +419,7 @@ function layout() {
   if ($("settings").open) syncSplitControls();
 }
 new ResizeObserver(layout).observe(player);
+new ResizeObserver(layout).observe(bar);      // the bar's height depends on its arrangement
 
 function setSplit(share) {
   prefs.split[orient()] = share;
@@ -492,7 +493,8 @@ function render() {
   const sec = Math.floor(video.currentTime);
   if (sec !== S.lastSecond) {
     S.lastSecond = sec;
-    $("time").textContent = `${clock(video.currentTime)} / ${clock(video.duration)}`;
+    $("time").textContent = clock(video.currentTime);
+    $("timeEnd").textContent = clock(video.duration);
     if (document.activeElement !== $("seek") && video.duration) $("seek").value = (video.currentTime / video.duration) * 1000;
   }
 }
@@ -517,14 +519,13 @@ const togglePlay = () => (video.paused ? video.play().catch(() => {}) : video.pa
 $("playBtn").addEventListener("click", togglePlay);
 video.addEventListener("play", () => { $("playBtn").textContent = "❚❚"; $("playBtn").ariaLabel = "Pause"; keepAwake(true); });
 video.addEventListener("pause", () => { $("playBtn").textContent = "▶︎"; $("playBtn").ariaLabel = "Play"; keepAwake(false); save(); });
-video.addEventListener("click", () => { if (performance.now() > quietUntil) togglePlay(); });
+video.addEventListener("click", togglePlay);
 $("seek").addEventListener("input", () => { if (video.duration) video.currentTime = ($("seek").value / 1000) * video.duration; });
 $("editBtn").addEventListener("click", () => setEditing(!S.editing));
 $("moreBtn").addEventListener("click", openSettings);
 
 const fsTarget = document.documentElement;
 const canFullscreen = !!(fsTarget.requestFullscreen || fsTarget.webkitRequestFullscreen);
-$("fsBtn").hidden = !canFullscreen;
 $("fsBtn").addEventListener("click", () => {
   if (document.fullscreenElement || document.webkitFullscreenElement) (document.exitFullscreen || document.webkitExitFullscreen).call(document);
   else (fsTarget.requestFullscreen || fsTarget.webkitRequestFullscreen).call(fsTarget);
@@ -545,8 +546,13 @@ function updateChips() {
 }
 
 addEventListener("keydown", (e) => {
-  if (player.hidden || e.target.closest("input, select, textarea, dialog")) return;
+  if (player.hidden || e.target.closest?.("input, select, textarea, dialog")) return;
   const k = e.key.toLowerCase();
+  if (arranging) {
+    const how = { arrowleft: "left", arrowright: "right", arrowup: "up", arrowdown: "down" }[k];
+    if (how) { moveSelected(how); e.preventDefault(); } else if (k === "escape" || k === "enter") setArranging(false);
+    return;
+  }
   if (k === " ") { e.preventDefault(); togglePlay(); }
   else if (k === "arrowleft") skip(-5);
   else if (k === "arrowright") skip(5);
@@ -562,47 +568,116 @@ addEventListener("keydown", (e) => {
 // Tap a word: jump there (or fix it in edit mode).
 panel.addEventListener("click", (e) => {
   const span = e.target.closest(".w");
-  if (!span || performance.now() < quietUntil) return;
+  if (!span) return;
   const i = Number(span.dataset.i);
   if (S.editing) { openEditor(i); return; }
   const w = S.words[i];
   video.currentTime = Math.max(0, w.start + S.audioOffsetMs + S.syncMs - S.leadMs + 10) / 1000;
 });
 
-// ---------------------------------------------------------------- two-finger gestures
-// On the video and the subtitles: a two-finger tap plays or pauses, a two-finger swipe left goes
-// back 10 s and right forward 10 s. Single-finger taps keep their meaning (video: play/pause,
-// word: jump there); the browser doesn't zoom or scroll there (touch-action: none).
-const SKIP_S = 10;
-let twoFinger = null, quietUntil = 0;
-const midpoint = (t) => ({ x: (t[0].clientX + t[1].clientX) / 2, y: (t[0].clientY + t[1].clientY) / 2 });
-for (const el of [document.querySelector(".video-box"), panel]) {
-  el.addEventListener("touchstart", (e) => {
-    if (e.touches.length === 2 && !e.target.closest(".splitter")) {
-      twoFinger = { ...midpoint(e.touches), t: performance.now(), dx: 0, dy: 0 };
-      e.preventDefault();
-    } else if (e.touches.length > 2) twoFinger = null;
-  }, { passive: false });
-  el.addEventListener("touchmove", (e) => {
-    if (!twoFinger || e.touches.length !== 2) return;
-    e.preventDefault();
-    const m = midpoint(e.touches);
-    Object.assign(twoFinger, { dx: m.x - twoFinger.x, dy: m.y - twoFinger.y });
-  }, { passive: false });
-  el.addEventListener("touchend", () => {
-    if (!twoFinger) return;
-    const g = twoFinger;
-    twoFinger = null;
-    quietUntil = performance.now() + 600;   // the fingers lifting are not single taps
-    if (Math.abs(g.dx) > 40 && Math.abs(g.dx) > 1.5 * Math.abs(g.dy)) skip(g.dx < 0 ? -SKIP_S : SKIP_S);
-    else if (Math.hypot(g.dx, g.dy) < 15 && performance.now() - g.t < 400) {
-      togglePlay();
-      flash(video.paused ? "❚❚" : "▶︎");
-    }
-  });
-  el.addEventListener("touchcancel", () => (twoFinger = null));
+// ---------------------------------------------------------------- control bar
+// Two rows of parts (data-el in index.html), arranged by the viewer and kept on this device:
+// Settings → Arrange the buttons, then tap a part and move it. Settings itself can't be hidden,
+// so the bar can always be arranged again.
+const BAR_DEFAULT = { rows: [["progress", "fullscreen"], ["back", "rewind", "play", "forward", "speed", "timing", "fix", "settings"]], hidden: [] };
+const BAR_LABELS = { progress: "Progress bar", back: "Back", rewind: "−5s", play: "Play", forward: "+5s", speed: "Speed",
+  timing: "Timing", fix: "Fix", settings: "Settings", fullscreen: "Full screen" };
+// Kept here, not looked up: a part taken out of the bar is detached for a moment and couldn't be found.
+const PARTS = new Map([...bar.querySelectorAll("[data-el]")].map((el) => [el.dataset.el, el]));
+const barPart = (id) => PARTS.get(id);
+const canShow = (id) => id !== "fullscreen" || canFullscreen;   // no element full screen on iPhone
+/** The saved arrangement, made valid: every part exactly once (parts added later go to row 2). */
+function barConfig() {
+  const c = prefs.bar?.rows ? prefs.bar : BAR_DEFAULT, seen = new Set();
+  const take = (ids, ok = () => true) => (Array.isArray(ids) ? ids : [])
+    .filter((id) => BAR_LABELS[id] && ok(id) && !seen.has(id) && seen.add(id));
+  const rows = [take(c.rows[0]), take(c.rows[1])];
+  const hidden = take(c.hidden, (id) => id !== "settings");
+  for (const id of Object.keys(BAR_LABELS)) if (!seen.has(id)) rows[1].push(id);
+  return { rows, hidden };
 }
-player.addEventListener("gesturestart", (e) => e.preventDefault());   // Safari's pinch zoom
+let arranging = false, selected = null;
+function renderBar() {
+  const { rows, hidden } = barConfig();   // prefs.bar stays null until the viewer arranges the bar
+  rows.forEach((ids, r) => $(`barRow${r + 1}`).replaceChildren(...ids.filter(canShow).map(barPart)));
+  $("barParts").replaceChildren(...hidden.map(barPart), ...(canFullscreen ? [] : [barPart("fullscreen")]));
+  for (const el of bar.querySelectorAll("[data-el]")) el.classList.toggle("selected", arranging && el.dataset.el === selected);
+  if (arranging) {
+    $("arrangeHint").textContent = selected ? `Move “${BAR_LABELS[selected]}”:` : "Tap a button in the bar, then move it.";
+    for (const b of $("arrange").querySelectorAll("[data-move]")) b.disabled = !selected || (b.dataset.move === "hide" && selected === "settings");
+    $("hiddenParts").replaceChildren(...hidden.map((id) => {
+      const b = Object.assign(document.createElement("button"), { type: "button", className: "chip", textContent: BAR_LABELS[id] });
+      b.addEventListener("click", () => showPart(id));
+      return b;
+    }));
+    $("hiddenRow").hidden = !hidden.length;
+  }
+  layout();
+}
+function setArranging(on) {
+  arranging = on;
+  if (!on) selected = null;
+  player.classList.toggle("arranging", on);
+  $("arrange").hidden = !on;
+  renderBar();
+}
+function saveBar(cfg) {
+  prefs.bar = cfg;
+  savePrefs();
+  renderBar();
+}
+// While arranging, a tap on a part selects it instead of using it.
+bar.addEventListener("click", (e) => {
+  const part = arranging && e.target.closest(".bar-row [data-el]");
+  if (!part) return;
+  e.preventDefault();
+  e.stopPropagation();
+  selected = part.dataset.el;
+  renderBar();
+}, true);
+$("arrange").addEventListener("click", (e) => {
+  const how = e.target.closest("[data-move]")?.dataset.move;
+  if (how) moveSelected(how);
+});
+/** Moves the selected part left/right within its row, up/down to the other row, or hides it. */
+function moveSelected(how) {
+  if (!selected) return;
+  const cfg = barConfig(), r = cfg.rows.findIndex((row) => row.includes(selected));
+  if (r < 0) return;
+  const row = cfg.rows[r], i = row.indexOf(selected);
+  if (how === "left" || how === "right") {
+    const step = how === "left" ? -1 : 1;
+    let j = i + step;
+    while (j >= 0 && j < row.length && !canShow(row[j])) j += step;   // skip parts this device doesn't show
+    if (j < 0 || j >= row.length) return;
+    [row[i], row[j]] = [row[j], row[i]];
+  } else if (how === "up" || how === "down") {
+    const to = how === "up" ? 0 : 1;
+    if (to === r) return;
+    row.splice(i, 1);
+    cfg.rows[to].splice(Math.min(i, cfg.rows[to].length), 0, selected);
+  } else if (how === "hide") {
+    if (selected === "settings") return;
+    row.splice(i, 1);
+    cfg.hidden.push(selected);
+    selected = null;
+  }
+  saveBar(cfg);
+}
+function showPart(id) {
+  const cfg = barConfig();
+  cfg.hidden = cfg.hidden.filter((x) => x !== id);
+  cfg.rows[1].push(id);
+  selected = id;
+  saveBar(cfg);
+}
+$("arrangeReset").addEventListener("click", () => { selected = null; saveBar(structuredClone(BAR_DEFAULT)); });
+$("arrangeDone").addEventListener("click", () => setArranging(false));
+$("backBtn").addEventListener("click", goHome);
+$("rewindBtn").addEventListener("click", () => skip(-5));
+$("forwardBtn").addEventListener("click", () => skip(5));
+
+// ---------------------------------------------------------------- seeking, with a brief hint on the video
 function skip(s) {
   video.currentTime = clamp(video.currentTime + s, 0, video.duration || 0);
   flash(s < 0 ? `« ${-s} s` : `${s} s »`);
@@ -804,8 +879,9 @@ $("sync").addEventListener("input", () => {
 });
 $("sync").addEventListener("change", save);
 $("language").addEventListener("change", () => { S.language = $("language").value; rebuildLayout(); save(); });
-$("openOther").addEventListener("click", () => {
-  $("settings").close();
+function goHome() {
+  if ($("settings").open) $("settings").close();
+  if (arranging) setArranging(false);
   video.pause();
   save();
   player.hidden = true;
@@ -816,7 +892,9 @@ $("openOther").addEventListener("click", () => {
   setStep("json", "Choose its .json file", false);
   updateStart();
   drawRecent();
-});
+}
+$("openOther").addEventListener("click", goHome);
+$("arrangeBtn").addEventListener("click", () => { $("settings").close(); setArranging(true); });
 
 // ---------------------------------------------------------------- GitHub settings
 function openGhDialog() {
@@ -938,6 +1016,7 @@ function toast(text, actionLabel, action) {
 // ---------------------------------------------------------------- start-up
 $("version").textContent = `v${VERSION}`;
 connect(ghConfig());
+renderBar();
 drawRecent();
 addEventListener("online", () => syncFixes());
 let lastPull = 0;
