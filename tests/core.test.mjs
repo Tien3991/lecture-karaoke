@@ -150,3 +150,10 @@ test("timing offset: + shows every subtitle earlier, - later, by exactly the off
   assert.deepEqual(early[1].word_cs, exact[1].word_cs.map((c) => c - 200), "+2 s");
   assert.equal(early[0].start_cs, 0, "times before the video starts are clamped to 0");
 });
+
+test("release: app.js, sw.js and index.html carry the same version", () => {
+  const src = (f) => readFileSync(new URL(`../${f}`, import.meta.url), "utf8");
+  const app = src("app.js").match(/const VERSION = "([^"]+)"/)[1];
+  assert.equal(src("sw.js").match(/const VERSION = "([^"]+)"/)[1], app, "sw.js");
+  assert.equal(src("index.html").match(/<meta name="app-version" content="([^"]+)">/)[1], app, "index.html");
+});

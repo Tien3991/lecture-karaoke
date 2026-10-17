@@ -7,6 +7,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Karaoke">
+<meta name="app-version" content="1.1.1">
 <meta name="description" content="Plays your lecture videos with live karaoke subtitles from their Soniox transcripts. Files stay on your device.">
 <title>Lecture Karaoke</title>
 <link rel="manifest" href="manifest.webmanifest">
@@ -133,6 +134,8 @@
   </form>
 </dialog>
 
+<!-- Kept for 1.0.x scripts: during their update they can briefly run against this page. -->
+<input type="hidden" id="leadCustom">
 <div id="toast" class="toast" role="status" hidden></div>
 <div id="updateBanner" class="update" hidden>A new version is ready. <button id="reloadBtn">Reload</button></div>
 </body>

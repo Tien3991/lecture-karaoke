@@ -1,8 +1,11 @@
-// Service worker: keeps the app shell available offline. Pages are fetched network-first so an
-// installed (Home Screen) app picks up new versions; other files come from the cache first.
-// Keep VERSION equal to app.js's VERSION and change both with every release: a new cache name is
-// what makes installed apps fetch the new files.
-const VERSION = "1.1.0";
+// Service worker: keeps the app available offline. Everything, the page included, comes from this
+// worker's own cache, so the page and its scripts are always the same release (a page fetched
+// fresh next to cached scripts once broke the app after an update). A new release arrives as a new
+// worker, which the browser finds by itself on the next visit; the app then shows its
+// "new version" banner, and Reload opens the new release.
+// VERSION must equal app.js's VERSION and index.html's app-version (npm test checks this); change
+// all three with every release: the new cache name is what makes installed apps fetch new files.
+const VERSION = "1.1.1";
 const CACHE = `lecture-karaoke-${VERSION}`;
 const SHELL = ["./", "index.html", "styles.css", "app.js", "core/transcript.js", "core/layout.js", "core/timeline.js",
   "core/mp4.js", "core/corrections.js", "core/store.js", "manifest.webmanifest", "icons/icon-180.png", "icons/icon-192.png",
@@ -24,13 +27,9 @@ self.addEventListener("fetch", (event) => {
   const req = event.request;
   if (req.method !== "GET" || new URL(req.url).origin !== self.location.origin) return;
   if (req.mode === "navigate") {
-    event.respondWith(fetch(req).then((res) => {
-      if (res.ok) {
-        const copy = res.clone();   // clone now: the page consumes the body
-        caches.open(CACHE).then((c) => c.put(req, copy));
-      }
-      return res;
-    }).catch(() => caches.match(req, { ignoreSearch: true }).then((hit) => hit || caches.match("index.html"))));
+    // The app's pages from the cache; any other page from the network (offline: the app).
+    event.respondWith(caches.match(req, { ignoreSearch: true }).then((hit) => hit ||
+      fetch(req).catch(() => caches.match("index.html"))));
     return;
   }
   event.respondWith(caches.match(req).then((hit) => hit || fetch(req)));

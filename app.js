@@ -6,7 +6,7 @@ import { blobReader, readMp4Info } from "./core/mp4.js";
 import { applyFixes, exportTranscript, setFix, transcriptText } from "./core/corrections.js";
 import * as store from "./core/store.js";
 
-const VERSION = "1.1.0";
+const VERSION = "1.1.1";
 // Proportions of the burned vertical video (identical in every pipeline calibration), in em of
 // the main subtitle text: line limit, frame width, and the height the three blocks need.
 const FIT_EM = 892.4 / 67.797, FRAME_EM = 1080 / 67.797, PANEL_EM = 14.4, CTX_SCALE = 74 / 93;
@@ -20,6 +20,16 @@ const isFirefox = /Firefox\//.test(navigator.userAgent);
 const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
 const isMobile = isIOS || /Android/i.test(navigator.userAgent);
 const dev = ["localhost", "127.0.0.1"].includes(location.hostname);
+
+// The page and this script must be the same release. A service-worker update could briefly pair
+// them across releases (the page fresh, the script cached): reload once to get a matching pair.
+const pageVersion = document.querySelector('meta[name="app-version"]')?.content;
+try {
+  if (pageVersion && pageVersion !== VERSION && !sessionStorage.getItem("lecture-karaoke.reloaded")) {
+    sessionStorage.setItem("lecture-karaoke.reloaded", "1");
+    location.reload();
+  } else if (pageVersion === VERSION) sessionStorage.removeItem("lecture-karaoke.reloaded");
+} catch { /* storage unavailable: carry on */ }
 
 const $ = (id) => document.getElementById(id);
 const clamp = (x, lo, hi) => Math.min(hi, Math.max(lo, x));

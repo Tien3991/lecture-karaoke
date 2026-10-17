@@ -47,7 +47,9 @@ Plain HTML, CSS and ES modules; no build step.
   `http://127.0.0.1:8765/?video=/media/<name>&json=/media/<name>` (URL-encoded) to skip the pickers.
 - `npm test` checks the subtitle logic against fixtures from the pipeline
   (`dev/make_fixtures.py`; they contain transcripts, so they live outside this repository).
-- Releasing: change `VERSION` in both `app.js` and `sw.js`, then push. Installed apps show a
-  "new version" banner.
+- Releasing: change the version in `app.js`, `sw.js` and the `app-version` meta of `index.html`
+  (`npm test` checks they match), then push. Installed apps show a "new version" banner; the page
+  and its scripts always come from the same release's cache. Keep element ids that older releases'
+  scripts look up, since they can briefly run against a newer page while updating.
 
 Videos, transcripts and fixtures are never committed (see `.gitignore`).
