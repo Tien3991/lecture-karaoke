@@ -7,7 +7,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { open } from "node:fs/promises";
 import { CONJ_BY_LANGUAGE, attachPunctuation, isSentenceEnd, tokensToWords, wordsFromTranscript } from "../core/transcript.js";
 import { activeEvent, buildEvents, buildPieces, spokenCount } from "../core/timeline.js";
-import { readMp4Info } from "../core/mp4.js";
+import { readMp4Info, videoFingerprint } from "../core/mp4.js";
 import { applyFixes, exportTranscript, setFix, transcriptText } from "../core/corrections.js";
 
 const FIX = process.env.FIXTURES || new URL("../../app_test_fixtures/", import.meta.url).pathname;
@@ -156,4 +156,51 @@ test("release: app.js, sw.js and index.html carry the same version", () => {
   const app = src("app.js").match(/const VERSION = "([^"]+)"/)[1];
   assert.equal(src("sw.js").match(/const VERSION = "([^"]+)"/)[1], app, "sw.js");
   assert.equal(src("index.html").match(/<meta name="app-version" content="([^"]+)">/)[1], app, "index.html");
+});
+
+test("video fingerprint: the app computes what vertical_video_maker computes, for every video", { skip: !existsSync(FIX + "fingerprints.json") && "no fingerprints.json" }, async () => {
+  const expected = json(FIX + "fingerprints.json");
+  assert.equal(Object.keys(expected).length, 23);
+  for (const [stem, e] of Object.entries(expected)) {
+    const fh = await open(e.video);
+    try {
+      const read = async (offset, length) => {
+        const b = Buffer.alloc(length);
+        await fh.read(b, 0, length, offset);
+        return new Uint8Array(b.buffer, b.byteOffset, length);
+      };
+      assert.equal(await videoFingerprint(await readMp4Info(read, e.size), e.size), e.fingerprint, stem);
+    } finally {
+      await fh.close();
+    }
+  }
+});
+
+test("shared fixes: changes from two devices merge instead of overwriting each other", async () => {
+  const { applyDeltas, deltaFor, sameFixes } = await import("../core/sync.js");
+  const word = (text, start, orig) => ({ text, start, end: start + 100, ...(orig ? { orig } : {}) });
+  const remote0 = [];
+  // device A fixes one word while offline; device B fixes another and syncs first
+  const a = [deltaFor(word("stuff", 1000), "material")];
+  const remote1 = applyDeltas(remote0, [deltaFor(word("wrold", 2000), "world")]);
+  const remote2 = applyDeltas(remote1, a);                      // A syncs later: both fixes kept
+  assert.deepEqual(remote2.map((f) => f.new), ["material", "world"]);
+  // A edits its fix again, then undoes it by typing the original back: the fix disappears
+  const edited = applyDeltas(remote2, [deltaFor(word("material", 1000, "stuff"), "matter")]);
+  assert.deepEqual(edited.find((f) => f.start_ms === 1000), { start_ms: 1000, old: "stuff", new: "matter" });
+  const undone = applyDeltas(edited, [deltaFor(word("matter", 1000, "stuff"), "stuff")]);
+  assert.deepEqual(undone, [{ start_ms: 2000, old: "wrold", new: "world" }]);
+  // removing a word is a fix with new "", undo is new null
+  const removed = applyDeltas(undone, [deltaFor(word("um", 1500), "")]);
+  assert.equal(removed.find((f) => f.start_ms === 1500).new, "");
+  assert.equal(applyDeltas(removed, [{ start_ms: 1500, old: "um", new: null }]).length, 1);
+  assert.ok(sameFixes(remote2, [...remote2].reverse()), "order doesn't matter");
+});
+
+test("GitHub contents: text survives base64 both ways, Vietnamese and emoji included", async () => {
+  const { base64FromUtf8, utf8FromBase64 } = await import("../core/github.js");
+  const text = JSON.stringify({ tokens: [{ text: "Tiếng Việt đẹp — “quotes” 🎓" }], big: "x".repeat(100000) });
+  assert.equal(utf8FromBase64(base64FromUtf8(text)), text);
+  assert.equal(base64FromUtf8("héllo"), Buffer.from("héllo").toString("base64"), "same as standard base64");
+  assert.equal(utf8FromBase64("aMOp\nbGxv"), "héllo", "line breaks in GitHub's base64 are ignored");
 });

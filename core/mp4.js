@@ -19,7 +19,21 @@ export async function readMp4Info(read, size) {
     offset += boxSize;
   }
   if (!moov) throw new Error("no moov box: is this an MP4 file?");
-  return parseMoov(moov);
+  return { ...parseMoov(moov), moov };
+}
+
+/**
+ * Identifies a video file whatever its name: SHA-256 of its size and its moov box (the index of
+ * every sample, which differs between any two encodes). Uses only what readMp4Info read, so it
+ * costs about a millisecond per MB of moov. vertical_video_maker computes the same value.
+ */
+export async function videoFingerprint(info, size) {
+  const head = new TextEncoder().encode(`lk-fp1:${size}:`);
+  const buf = new Uint8Array(head.length + info.moov.length);
+  buf.set(head);
+  buf.set(info.moov, head.length);
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", buf));
+  return "fp1-" + [...digest].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
 /** Read from a browser File/Blob. */

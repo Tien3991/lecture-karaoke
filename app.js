@@ -2,11 +2,13 @@
 // transcript. The subtitle rules are the vertical_video_maker pipeline's (ported in core/).
 import { CONJ_BY_LANGUAGE, wordsFromTranscript } from "./core/transcript.js";
 import { activeEvent, buildEvents, buildPieces, spokenCount } from "./core/timeline.js";
-import { blobReader, readMp4Info } from "./core/mp4.js";
-import { applyFixes, exportTranscript, setFix, transcriptText } from "./core/corrections.js";
+import { blobReader, readMp4Info, videoFingerprint } from "./core/mp4.js";
+import { applyFixes, exportTranscript, transcriptText } from "./core/corrections.js";
+import { GitHub } from "./core/github.js";
+import { applyDeltas, deltaFor, sameFixes } from "./core/sync.js";
 import * as store from "./core/store.js";
 
-const VERSION = "1.1.1";
+const VERSION = "1.2.0";
 // Proportions of the burned vertical video (identical in every pipeline calibration), in em of
 // the main subtitle text: line limit, frame width, and the height the three blocks need.
 const FIT_EM = 892.4 / 67.797, FRAME_EM = 1080 / 67.797, PANEL_EM = 14.4, CTX_SCALE = 74 / 93;
@@ -20,6 +22,11 @@ const isFirefox = /Firefox\//.test(navigator.userAgent);
 const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
 const isMobile = isIOS || /Android/i.test(navigator.userAgent);
 const dev = ["localhost", "127.0.0.1"].includes(location.hostname);
+/** Development only: ?api=/mock-github points the app at dev/serve.mjs's stand-in for GitHub. */
+const devApi = () => {
+  const api = dev && new URLSearchParams(location.search).get("api");
+  return api ? new URL(api, location.href).href.replace(/\/$/, "") : undefined;
+};
 
 // The page and this script must be the same release. A service-worker update could briefly pair
 // them across releases (the page fresh, the script cached): reload once to get a matching pair.
@@ -35,8 +42,8 @@ const $ = (id) => document.getElementById(id);
 const clamp = (x, lo, hi) => Math.min(hi, Math.max(lo, x));
 const video = $("video"), panel = $("panel"), player = $("player"), bar = document.querySelector(".bar");
 const S = {
-  videoFile: null, jsonFile: null, videoUrl: null, videoName: "", transcript: null, id: null, rec: {},
-  baseWords: [], words: [], pieces: [], events: [], durationMs: 0, audioOffsetMs: 0,
+  videoFile: null, jsonFile: null, picked: null, wanted: null, videoUrl: null, videoName: "", transcript: null,
+  id: null, rec: {}, repoKey: null, baseWords: [], words: [], pieces: [], events: [], durationMs: 0, audioOffsetMs: 0,
   leadMs: 0, syncMs: 0, language: "en", editing: false, shown: -2, spoken: -1, lastSecond: -1,
 };
 
@@ -86,50 +93,137 @@ async function prepareFont(sampleText) {
   widths.clear();
 }
 
+// ---------------------------------------------------------------- transcripts on GitHub
+// The private repository shared with vertical_video_maker (layout in core/github.js). The token
+// is pasted once per device and kept in this browser's storage for this site.
+const GH_KEY = "lecture-karaoke.github";
+let gh = null;
+function ghConfig() {
+  try { return JSON.parse(localStorage.getItem(GH_KEY) || "null"); } catch { return null; }
+}
+function connect(cfg) {
+  gh = cfg?.repo && cfg?.token ? new GitHub({ repo: cfg.repo, token: cfg.token, api: devApi() }) : null;
+  $("ghLine").textContent = gh ? `GitHub: ${gh.repo}` : "Connect GitHub";
+  drawSyncNote();
+}
+/** A repository file through this device's copy: offline it opens anyway, and an unchanged file
+ *  isn't downloaded again. {text, etag} or null when the file doesn't exist. */
+async function repoFile(path) {
+  const key = `gh:${gh.repo}:${path}`, cached = await store.getFile(key);
+  try {
+    const got = await gh.readText(path, cached);
+    if (got && got !== cached) await store.putFile(key, got);
+    return got;
+  } catch (err) {
+    if (err.kind === "offline" && cached) return cached;
+    throw err;
+  }
+}
+async function repoIndex() {
+  const f = await repoFile("index.json");
+  return f ? JSON.parse(f.text) : { version: 1, videos: [] };
+}
+
 // ---------------------------------------------------------------- opening files
 const problems = $("problems");
 function setProblems(list) {
   problems.replaceChildren(...list.map((t) => Object.assign(document.createElement("p"), { textContent: t })));
 }
-function chooseVideo(file) {
-  S.videoFile = file;
-  $("videoName").textContent = file.name;
-  $("pickVideo").closest(".pick").classList.add("done");
-  updateStart();
-}
-function chooseJson(file) {
-  S.jsonFile = file;
-  $("jsonName").textContent = file.name;
-  $("pickJson").closest(".pick").classList.add("done");
-  updateStart();
+function setStep(which, text, done) {
+  $(which === "video" ? "videoName" : "jsonName").textContent = text;
+  $(which === "video" ? "pickVideo" : "pickJson").closest(".pick").classList.toggle("done", !!done);
 }
 function updateStart() {
   $("startBtn").disabled = !(S.videoFile && S.jsonFile);
-  setProblems([]);
 }
-$("pickVideo").addEventListener("change", (e) => e.target.files[0] && chooseVideo(e.target.files[0]));
-$("pickJson").addEventListener("change", (e) => e.target.files[0] && chooseJson(e.target.files[0]));
+// The inputs are emptied after each pick, so picking the same file again still counts.
+$("pickVideo").addEventListener("change", (e) => { const f = e.target.files[0]; e.target.value = ""; if (f) pickedVideo(f); });
+$("pickJson").addEventListener("change", (e) => { const f = e.target.files[0]; e.target.value = ""; if (f) pickedJson(f); });
 
-// Drag and drop both files onto the welcome screen.
+// Drag and drop onto the welcome screen (a dropped .json is used instead of looking one up).
 addEventListener("dragover", (e) => { e.preventDefault(); document.body.classList.add("dragging"); });
 addEventListener("dragleave", (e) => { if (!e.relatedTarget) document.body.classList.remove("dragging"); });
 addEventListener("drop", (e) => {
   e.preventDefault();
   document.body.classList.remove("dragging");
   if (!player.hidden) return;
-  for (const f of e.dataTransfer.files) {
-    if (/\.json$/i.test(f.name) || f.type === "application/json") chooseJson(f);
-    else if (f.type.startsWith("video/") || /\.(mp4|m4v|mov)$/i.test(f.name)) chooseVideo(f);
-  }
+  const files = [...e.dataTransfer.files];
+  const json = files.find((f) => /\.json$/i.test(f.name) || f.type === "application/json");
+  const vid = files.find((f) => f.type.startsWith("video/") || /\.(mp4|m4v|mov)$/i.test(f.name));
+  if (vid) pickedVideo(vid, { lookup: !json });
+  if (json) pickedJson(json);
 });
+
+/** What the app needs from a video: its MP4 details and its fingerprint (reads 1-3 MB of it). */
+async function probeVideo(file) {
+  const info = await readMp4Info(blobReader(file), file.size);
+  return { file, info, fingerprint: await videoFingerprint(info, file.size) };
+}
+
+async function pickedVideo(file, { lookup = true } = {}) {
+  const wanted = S.wanted;
+  Object.assign(S, { videoFile: file, jsonFile: null, picked: null, wanted: null });
+  setStep("video", file.name, true);
+  setStep("json", lookup ? "Looking for its transcript…" : "Choose its .json file", false);
+  setProblems([]);
+  updateStart();
+  try {
+    S.picked = await probeVideo(file);
+    if (!lookup) return;
+    if (wanted?.video?.fingerprint && wanted.video.fingerprint !== S.picked.fingerprint) {
+      toast(`That isn't “${wanted.title}”; looking for this video's transcript.`);
+    }
+    const found = await findTranscript(S.picked);
+    if (!found) {
+      setStep("json", gh ? "Not on GitHub yet: choose its .json file" : "Choose its .json file", false);
+      return;
+    }
+    setStep("json", found.label, true);
+    const text = await transcriptFile(found.ref);
+    if (!text) throw new Error("Its transcript isn't on this device, and GitHub can't be reached.");
+    await openPair(JSON.parse(text), S.picked, found);
+  } catch (err) {
+    setStep("json", "Choose its .json file", false);
+    setProblems([err.kind ? err.message : `Could not open this video: ${err.message}`]);
+  }
+}
+function pickedJson(file) {
+  S.jsonFile = file;
+  setStep("json", file.name, true);
+  setProblems([]);
+  updateStart();
+}
+
+/** Where this video's transcript is: on GitHub (by fingerprint; by file name only after asking),
+ *  or a lecture opened on this device before (this also works offline). */
+async function findTranscript({ file, fingerprint }) {
+  const mine = (await store.list()).find((r) => r.video?.fingerprint === fingerprint && r.transcriptRef);
+  let entry = null;
+  if (gh) {
+    try {
+      const videos = (await repoIndex()).videos || [];
+      entry = videos.find((v) => v.fingerprint === fingerprint) || null;
+      const byName = !entry && !mine && videos.find((v) => v.name === file.name);
+      if (byName && confirm(`GitHub has a transcript for a video named “${file.name}”, but made from a different file. Use it anyway?`)) entry = byName;
+    } catch (err) {
+      if (!mine) throw err;
+    }
+  }
+  if (entry) return { ref: `gh:${gh.repo}:${entry.transcript}`, key: entry.key, label: "Found on GitHub" };
+  if (mine) return { ref: mine.transcriptRef, key: mine.repoKey ?? null, label: "Opened on this device before" };
+  return null;
+}
+async function transcriptFile(ref) {
+  if (gh && ref.startsWith(`gh:${gh.repo}:`)) return (await repoFile(ref.slice(`gh:${gh.repo}:`.length)))?.text ?? null;
+  return (await store.getFile(ref))?.text ?? null;
+}
 
 $("startBtn").addEventListener("click", async () => {
   $("startBtn").disabled = true;
   try {
-    const data = JSON.parse(await S.jsonFile.text());
-    const info = await readMp4Info(blobReader(S.videoFile), S.videoFile.size);
-    const url = URL.createObjectURL(S.videoFile);
-    await openPair(data, info, url, S.videoFile.name, S.videoFile.size);
+    const text = await S.jsonFile.text();
+    const picked = S.picked?.file === S.videoFile ? S.picked : (S.picked = await probeVideo(S.videoFile));
+    await openPair(JSON.parse(text), picked, { ref: null, key: null, text });
   } catch (err) {
     setProblems([`Could not open these files: ${err.message}`]);
     $("startBtn").disabled = false;
@@ -137,7 +231,7 @@ $("startBtn").addEventListener("click", async () => {
 });
 
 /** Checks that the video and transcript belong together. Returns problems to show. */
-function pairingProblems(data, info, name, size, rec) {
+function pairingProblems(data, info, name, size, fingerprint, rec) {
   const out = [];
   if (!Array.isArray(data.tokens) || !data.tokens.length || !("start_ms" in data.tokens[0])) {
     return ["The transcript isn't a Soniox transcript JSON (no tokens with times)."];
@@ -150,15 +244,18 @@ function pairingProblems(data, info, name, size, rec) {
   if (info.durationSec && lastMs > info.durationSec * 1000 + 3000) {
     out.push("The transcript is longer than the video: they probably don't belong together.");
   }
-  if (rec.video && (rec.video.name !== name || rec.video.size !== size)) {
-    out.push(`Last time this transcript was opened with “${rec.video.name}”.`);
-  }
+  const other = rec.video && (rec.video.fingerprint && fingerprint ? rec.video.fingerprint !== fingerprint
+    : rec.video.name !== name || rec.video.size !== size);
+  if (other) out.push(`Last time this transcript was opened with “${rec.video.name}”.`);
   return out;
 }
 
-async function openPair(data, info, url, name, size) {
-  const rec = await store.load(data.id || name);
-  const issues = pairingProblems(data, info, name, size, rec);
+/** Opens a video with its transcript. picked: {file, info, fingerprint} (or a dev URL with
+ *  name/size); src: where the transcript came from (ref, repository key, or the picked text). */
+async function openPair(data, picked, { ref, key, text }) {
+  const { info, fingerprint } = picked, name = picked.file?.name ?? picked.name, size = picked.file?.size ?? picked.size;
+  const id = data.id || name, rec = await store.load(id);
+  const issues = pairingProblems(data, info, name, size, fingerprint, rec);
   if (issues.length && (issues[0].startsWith("This is a vertical") || issues[0].startsWith("The transcript isn't"))) {
     setProblems(issues);
     $("startBtn").disabled = false;
@@ -169,25 +266,30 @@ async function openPair(data, info, url, name, size) {
     return;
   }
   Object.assign(S, {
-    transcript: data, id: data.id || name, rec, videoName: name, durationMs: Math.round(info.durationSec * 1000),
+    transcript: data, id, rec, videoName: name, picked, repoKey: key ?? rec.repoKey ?? null,
+    durationMs: Math.round(info.durationSec * 1000),
     // Soniox counts from the first audio sample; Safari and Chromium keep the MP4's leading empty
     // edit (the audio starts that much into the timeline), Firefox drops it.
     audioOffsetMs: isFirefox ? 0 : Math.round(info.audioStartSec * 1000),
     leadMs: prefs.offsetOn ? prefs.offsetMs : 0, syncMs: rec.syncMs ?? 0, language: rec.language ?? "en",
     shown: -2, lastSecond: -1,
   });
-  S.rec.video = { name, size };
+  Object.assign(rec, {
+    video: { name, size, fingerprint }, title: name.replace(/\.[^.]+$/, ""), durationSec: info.durationSec,
+    lastOpened: Date.now(), hidden: false, repoKey: S.repoKey, transcriptRef: ref || `local:${id}`,
+  });
+  if (!ref) await store.putFile(`local:${id}`, { text: text ?? JSON.stringify(data) });
   S.baseWords = wordsFromTranscript(data);
-  S.words = applyFixes(S.baseWords, S.rec.fixes);
+  S.words = applyFixes(S.baseWords, rec.fixes);
   await prepareFont([...new Set(S.words.map((w) => w.text).join(""))].join(""));
   rebuildLayout();
-  if (S.videoUrl) URL.revokeObjectURL(S.videoUrl);
-  S.videoUrl = url;
-  video.src = url;
+  if (S.videoUrl?.startsWith("blob:")) URL.revokeObjectURL(S.videoUrl);
+  S.videoUrl = picked.file ? URL.createObjectURL(picked.file) : picked.url;
+  video.src = S.videoUrl;
   applyRate(prefs.rate);
   $("welcome").hidden = true;
   player.hidden = false;
-  document.title = `${name.replace(/\.[^.]+$/, "")} · Lecture Karaoke`;
+  document.title = `${rec.title} · Lecture Karaoke`;
   updateChips();
   layout();
   resize();
@@ -198,6 +300,76 @@ async function openPair(data, info, url, name, size) {
     }
   }, { once: true });
   save();
+  if (gh) linkToRepo();
+}
+
+/** Ties the open lecture to its place in the repository: syncs its fixes, or first puts a
+ *  transcript picked on this device there, for the other devices. */
+async function linkToRepo() {
+  const id = S.id, rec = S.rec, { info, fingerprint } = S.picked, name = S.videoName, data = S.transcript;
+  try {
+    if (!S.repoKey) {
+      const index = await repoIndex();
+      let entry = (index.videos || []).find((v) => v.fingerprint === fingerprint);
+      if (!entry) {
+        const stem = name.replace(/\.[^.]+$/, "");
+        const key = (index.videos || []).some((v) => v.key === stem) ? `${stem} (${fingerprint.slice(4, 12)})` : stem;
+        const path = `transcripts/${key}.json`;
+        const size = S.picked.file?.size ?? S.picked.size;
+        const text = JSON.stringify({ ...data, video: name, video_size: size, video_fingerprint: fingerprint,
+          duration_ms: Math.round(info.durationSec * 1000) });
+        if (!(await gh.write(path, text, null, `Add ${name} from the app`))) throw new Error(`${path} already exists on GitHub`);
+        entry = { key, name, size, fingerprint, duration_ms: Math.round(info.durationSec * 1000), transcript: path,
+          id: data.id ?? null, words: S.baseWords.length, updated: new Date().toISOString() };
+        await gh.update("index.json", (cur) => ({ version: 1, ...cur, videos: [...(cur?.videos || [])
+          .filter((v) => v.fingerprint !== fingerprint), entry].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)) }),
+        `Index ${name}`);
+        await store.putFile(`gh:${gh.repo}:${path}`, { text });
+        toast("Transcript saved to GitHub for your other devices");
+      }
+      Object.assign(rec, { repoKey: entry.key, transcriptRef: `gh:${gh.repo}:${entry.transcript}` });
+      if (S.id !== id) return store.save(id, structuredClone(rec));
+      S.repoKey = entry.key;
+      save();
+    }
+    if (S.id === id) await syncFixes();
+  } catch (err) {
+    if (err.kind !== "offline") toast(`Not saved to GitHub: ${err.message}`);
+  }
+}
+
+// ---------------------------------------------------------------- recent lectures
+async function drawRecent() {
+  const recs = (await store.list()).filter((r) => r.lastOpened && r.video && !r.hidden)
+    .sort((a, b) => b.lastOpened - a.lastOpened).slice(0, 8);
+  $("recent").hidden = !recs.length;
+  $("recentList").replaceChildren(...recs.map((r) => {
+    const li = document.createElement("li");
+    const open = Object.assign(document.createElement("button"), { type: "button", className: "recent-open" });
+    open.append(Object.assign(document.createElement("span"), { className: "recent-title", textContent: r.title || r.video.name }),
+      Object.assign(document.createElement("span"), { className: "recent-meta",
+        textContent: `${clock(r.position || 0)} of ${clock(r.durationSec)} · ${ago(r.lastOpened)}` }));
+    // Safari can't reopen a file by itself: the tap opens the picker (its Recents has the video).
+    open.addEventListener("click", () => {
+      S.wanted = r;
+      setStep("video", `Pick “${r.video.name}”`, false);
+      $("pickVideo").click();
+    });
+    const del = Object.assign(document.createElement("button"), { type: "button", className: "recent-del", textContent: "✕" });
+    del.setAttribute("aria-label", `Remove ${r.title || r.video.name} from this list`);
+    del.addEventListener("click", async () => {
+      const { id, ...rest } = r;
+      await store.save(id, { ...rest, hidden: true });
+      drawRecent();
+    });
+    li.append(open, del);
+    return li;
+  }));
+}
+function ago(t) {
+  const min = Math.round((Date.now() - t) / 60000), h = Math.round(min / 60), d = Math.round(h / 24);
+  return min < 1 ? "just now" : min < 60 ? `${min} min ago` : h < 24 ? `${h} h ago` : d === 1 ? "yesterday"
+    : d < 30 ? `${d} days ago` : new Date(t).toLocaleDateString();
 }
 
 // ---------------------------------------------------------------- subtitle layout and timing
@@ -345,7 +517,7 @@ const togglePlay = () => (video.paused ? video.play().catch(() => {}) : video.pa
 $("playBtn").addEventListener("click", togglePlay);
 video.addEventListener("play", () => { $("playBtn").textContent = "❚❚"; $("playBtn").ariaLabel = "Pause"; keepAwake(true); });
 video.addEventListener("pause", () => { $("playBtn").textContent = "▶︎"; $("playBtn").ariaLabel = "Play"; keepAwake(false); save(); });
-video.addEventListener("click", togglePlay);
+video.addEventListener("click", () => { if (performance.now() > quietUntil) togglePlay(); });
 $("seek").addEventListener("input", () => { if (video.duration) video.currentTime = ($("seek").value / 1000) * video.duration; });
 $("editBtn").addEventListener("click", () => setEditing(!S.editing));
 $("moreBtn").addEventListener("click", openSettings);
@@ -376,8 +548,8 @@ addEventListener("keydown", (e) => {
   if (player.hidden || e.target.closest("input, select, textarea, dialog")) return;
   const k = e.key.toLowerCase();
   if (k === " ") { e.preventDefault(); togglePlay(); }
-  else if (k === "arrowleft") video.currentTime = Math.max(0, video.currentTime - 5);
-  else if (k === "arrowright") video.currentTime = Math.min(video.duration || 0, video.currentTime + 5);
+  else if (k === "arrowleft") skip(-5);
+  else if (k === "arrowright") skip(5);
   else if (k === "arrowup" || k === "]") stepRate(1);
   else if (k === "arrowdown" || k === "[") stepRate(-1);
   else if (k === "l") $("leadBtn").click();
@@ -390,12 +562,59 @@ addEventListener("keydown", (e) => {
 // Tap a word: jump there (or fix it in edit mode).
 panel.addEventListener("click", (e) => {
   const span = e.target.closest(".w");
-  if (!span) return;
+  if (!span || performance.now() < quietUntil) return;
   const i = Number(span.dataset.i);
   if (S.editing) { openEditor(i); return; }
   const w = S.words[i];
   video.currentTime = Math.max(0, w.start + S.audioOffsetMs + S.syncMs - S.leadMs + 10) / 1000;
 });
+
+// ---------------------------------------------------------------- two-finger gestures
+// On the video and the subtitles: a two-finger tap plays or pauses, a two-finger swipe left goes
+// back 10 s and right forward 10 s. Single-finger taps keep their meaning (video: play/pause,
+// word: jump there); the browser doesn't zoom or scroll there (touch-action: none).
+const SKIP_S = 10;
+let twoFinger = null, quietUntil = 0;
+const midpoint = (t) => ({ x: (t[0].clientX + t[1].clientX) / 2, y: (t[0].clientY + t[1].clientY) / 2 });
+for (const el of [document.querySelector(".video-box"), panel]) {
+  el.addEventListener("touchstart", (e) => {
+    if (e.touches.length === 2 && !e.target.closest(".splitter")) {
+      twoFinger = { ...midpoint(e.touches), t: performance.now(), dx: 0, dy: 0 };
+      e.preventDefault();
+    } else if (e.touches.length > 2) twoFinger = null;
+  }, { passive: false });
+  el.addEventListener("touchmove", (e) => {
+    if (!twoFinger || e.touches.length !== 2) return;
+    e.preventDefault();
+    const m = midpoint(e.touches);
+    Object.assign(twoFinger, { dx: m.x - twoFinger.x, dy: m.y - twoFinger.y });
+  }, { passive: false });
+  el.addEventListener("touchend", () => {
+    if (!twoFinger) return;
+    const g = twoFinger;
+    twoFinger = null;
+    quietUntil = performance.now() + 600;   // the fingers lifting are not single taps
+    if (Math.abs(g.dx) > 40 && Math.abs(g.dx) > 1.5 * Math.abs(g.dy)) skip(g.dx < 0 ? -SKIP_S : SKIP_S);
+    else if (Math.hypot(g.dx, g.dy) < 15 && performance.now() - g.t < 400) {
+      togglePlay();
+      flash(video.paused ? "❚❚" : "▶︎");
+    }
+  });
+  el.addEventListener("touchcancel", () => (twoFinger = null));
+}
+player.addEventListener("gesturestart", (e) => e.preventDefault());   // Safari's pinch zoom
+function skip(s) {
+  video.currentTime = clamp(video.currentTime + s, 0, video.duration || 0);
+  flash(s < 0 ? `« ${-s} s` : `${s} s »`);
+}
+let flashTimer = 0;
+function flash(text) {
+  const f = $("flash");
+  f.textContent = text;
+  f.classList.add("show");
+  clearTimeout(flashTimer);
+  flashTimer = setTimeout(() => f.classList.remove("show"), 700);
+}
 
 // ---------------------------------------------------------------- speed (0.2× to 4×)
 /** Sets the speed, or says so and returns false when this browser refuses it. */
@@ -494,20 +713,71 @@ function openEditor(i) {
 $("editorCancel").addEventListener("click", () => $("editor").close("cancel"));
 $("editor").addEventListener("close", () => {
   if ($("editor").returnValue !== "save" || editing < 0) return;
-  S.rec.fixes = setFix(S.rec.fixes, S.words[editing], $("editorText").value);
-  applyAndRelayout();
-  toast("Fix saved on this device");
+  changeFix(deltaFor(S.words[editing], $("editorText").value));
 });
+/** A fix made, changed or undone on this device: shown at once, then sent to GitHub. */
+function changeFix(delta) {
+  S.rec.fixes = applyDeltas(S.rec.fixes, [delta]);
+  if (gh && S.repoKey) S.rec.pending = [...(S.rec.pending || []), delta];
+  else S.rec.synced = false;          // goes to GitHub when this lecture is linked to it
+  applyAndRelayout();
+  if (!gh || !S.repoKey) return toast("Fix saved on this device");
+  toast("Fix saved");
+  syncFixes().then((ok) => { if (!ok && !S.rec.syncError) toast("Fix saved on this device; it will sync when online"); });
+}
 function applyAndRelayout() {
   S.words = applyFixes(S.baseWords, S.rec.fixes);
   rebuildLayout();
   save();
 }
 
+// Fixes are kept per lecture in fixes/<key>.json. Local changes wait in rec.pending until GitHub
+// has them; they are applied to GitHub's latest list (core/sync.js), so devices don't overwrite
+// each other, and whatever other devices added comes back.
+let syncing = null, syncAgain = false;
+function syncFixes() {
+  if (!gh || !S.repoKey || !S.id) return Promise.resolve(false);
+  if (syncing) { syncAgain = true; return syncing; }
+  const id = S.id, rec = S.rec, key = S.repoKey, name = S.videoName;
+  if (!rec.synced && rec.fixes?.length && !rec.pending?.length) rec.pending = rec.fixes.map((f) => ({ ...f }));
+  const sent = (rec.pending || []).slice();
+  syncing = gh.update(`fixes/${key}.json`, (cur) => (sent.length
+    ? { video: name, fixes: applyDeltas(cur?.fixes, sent), updated: new Date().toISOString() } : undefined),
+  `Fix words in ${name}`).then((data) => {
+    rec.pending = (rec.pending || []).slice(sent.length);
+    Object.assign(rec, { synced: true, syncError: null, syncedAt: Date.now() });
+    const fixes = applyDeltas(data?.fixes, rec.pending), changed = !sameFixes(fixes, rec.fixes);
+    rec.fixes = fixes;
+    if (S.id !== id) store.save(id, structuredClone(rec));
+    else if (changed) applyAndRelayout();
+    else save();
+    return true;
+  }).catch((err) => {
+    rec.syncError = err.kind === "offline" ? null : err.message;
+    if (rec.syncError) toast(`Fixes not synced: ${err.message}`);
+    return false;
+  }).finally(() => {
+    syncing = null;
+    drawSyncNote();
+    if (syncAgain) { syncAgain = false; syncFixes(); }
+  });
+  drawSyncNote();
+  return syncing;
+}
+function drawSyncNote() {
+  const n = (S.rec.pending || []).length, fixes = (S.rec.fixes || []).length;
+  $("ghNote").textContent = !gh ? "Not connected: transcripts come from files you pick, and fixes stay on this device."
+    : !S.repoKey ? `Connected to ${gh.repo}. This lecture isn't there yet.`
+    : `Connected to ${gh.repo}. This lecture: ${fixes} fix${fixes === 1 ? "" : "es"}` +
+      (syncing ? ", syncing…" : S.rec.syncError ? `; not synced: ${S.rec.syncError}`
+        : n ? `; ${n} change${n === 1 ? "" : "s"} waiting to sync.` : ", all on GitHub.");
+}
+
 // ---------------------------------------------------------------- settings
 function openSettings() {
   syncOffsetControls();
   syncSplitControls();
+  drawSyncNote();
   $("sync").value = S.syncMs;
   $("syncOut").textContent = `${S.syncMs > 0 ? "+" : ""}${S.syncMs} ms`;
   $("language").value = S.language;
@@ -541,7 +811,54 @@ $("openOther").addEventListener("click", () => {
   player.hidden = true;
   $("welcome").hidden = false;
   document.title = "Lecture Karaoke";
-  $("startBtn").disabled = !(S.videoFile && S.jsonFile);
+  Object.assign(S, { videoFile: null, jsonFile: null, picked: S.picked, wanted: null });
+  setStep("video", "Choose the lecture video", false);
+  setStep("json", "Choose its .json file", false);
+  updateStart();
+  drawRecent();
+});
+
+// ---------------------------------------------------------------- GitHub settings
+function openGhDialog() {
+  const cfg = ghConfig();
+  $("ghRepo").value = cfg?.repo || "Tien3991/lecture-transcripts";
+  $("ghToken").value = "";
+  $("ghToken").placeholder = cfg?.token ? "saved (leave empty to keep it)" : "github_pat_…";
+  $("ghStatus").textContent = "";
+  $("ghRemove").hidden = !cfg;
+  $("ghDialog").showModal();
+}
+$("ghLine").addEventListener("click", openGhDialog);
+$("ghOpen").addEventListener("click", openGhDialog);
+$("ghCancel").addEventListener("click", () => $("ghDialog").close());
+$("ghRemove").addEventListener("click", () => {
+  try { localStorage.removeItem(GH_KEY); } catch { /* storage unavailable */ }
+  connect(null);
+  $("ghDialog").close();
+  toast("Disconnected; the token was removed from this device");
+});
+$("ghDialog").querySelector("form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const repo = $("ghRepo").value.trim().replace(/^https:\/\/github\.com\//, "").replace(/(\.git|\/)$/, "");
+  const token = $("ghToken").value.trim() || ghConfig()?.token;
+  if (!/^[\w.-]+\/[\w.-]+$/.test(repo) || !token) {
+    $("ghStatus").textContent = "Enter the repository as owner/name, and a token.";
+    return;
+  }
+  $("ghStatus").textContent = "Checking…";
+  try {
+    const test = new GitHub({ repo, token, api: devApi() });
+    const info = await test.repoInfo();
+    const index = await test.readText("index.json");
+    const count = index ? (JSON.parse(index.text).videos || []).length : 0;
+    try { localStorage.setItem(GH_KEY, JSON.stringify({ repo, token })); } catch { /* kept for this visit only */ }
+    connect({ repo, token });
+    $("ghDialog").close();
+    toast(`Connected to ${repo}: ${count} transcript${count === 1 ? "" : "s"}` + (info.private ? "" : ". Warning: this repository is public!"));
+    if (!player.hidden) linkToRepo();
+  } catch (err) {
+    $("ghStatus").textContent = err.message;
+  }
 });
 function drawFixList() {
   const fixes = S.rec.fixes || [];
@@ -551,8 +868,7 @@ function drawFixList() {
     label.textContent = `${clock((f.start_ms + S.audioOffsetMs) / 1000)}  “${f.old}” → ${f.new ? `“${f.new}”` : "removed"}`;
     const undo = Object.assign(document.createElement("button"), { type: "button", textContent: "Undo" });
     undo.addEventListener("click", () => {
-      S.rec.fixes = fixes.filter((x) => x !== f);
-      applyAndRelayout();
+      changeFix({ start_ms: f.start_ms, old: f.old, new: null });
       drawFixList();
     });
     li.append(label, undo);
@@ -621,6 +937,13 @@ function toast(text, actionLabel, action) {
 
 // ---------------------------------------------------------------- start-up
 $("version").textContent = `v${VERSION}`;
+connect(ghConfig());
+drawRecent();
+addEventListener("online", () => syncFixes());
+let lastPull = 0;
+document.addEventListener("visibilitychange", () => {   // back in the app: other devices' fixes
+  if (!document.hidden && !player.hidden && Date.now() - lastPull > 30000) { lastPull = Date.now(); syncFixes(); }
+});
 $("iosHint").hidden = !isIOS;
 navigator.storage?.persist?.().catch(() => {});
 if ("serviceWorker" in navigator && !dev) {
@@ -637,6 +960,7 @@ $("reloadBtn").addEventListener("click", () => location.reload());
 
 // Development only (localhost): ?video=URL&json=URL opens files served by dev/serve.mjs.
 if (dev) {
+  window.__lk = { S, video, prefs, store, activeEvent, spokenCount, syncFixes, get gh() { return gh; } };   // for checks
   const q = new URLSearchParams(location.search);
   if (q.get("video") && q.get("json")) {
     (async () => {
@@ -646,8 +970,8 @@ if (dev) {
       const read = async (offset, length) => new Uint8Array(await (await fetch(vurl,
         { headers: { Range: `bytes=${offset}-${offset + length - 1}` } })).arrayBuffer());
       const info = await readMp4Info(read, size);
-      await openPair(data, info, vurl, decodeURIComponent(vurl.split("/").pop()), size);
-      window.__lk = { S, video, prefs, activeEvent, spokenCount };   // for automated checks
+      await openPair(data, { url: vurl, name: decodeURIComponent(vurl.split("/").pop()), size, info,
+        fingerprint: await videoFingerprint(info, size) }, { ref: null, key: null });
     })().catch((err) => setProblems([`Dev open failed: ${err.message}`]));
   }
 }

@@ -7,7 +7,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Karaoke">
-<meta name="app-version" content="1.1.1">
+<meta name="app-version" content="1.2.0">
 <meta name="description" content="Plays your lecture videos with live karaoke subtitles from their Soniox transcripts. Files stay on your device.">
 <title>Lecture Karaoke</title>
 <link rel="manifest" href="manifest.webmanifest">
@@ -19,7 +19,11 @@
 <body>
 <main id="welcome" class="welcome">
   <h1>Lecture Karaoke</h1>
-  <p class="intro">Plays a lecture video with live karaoke subtitles from its transcript. Your files stay on this device; nothing is uploaded.</p>
+  <p class="intro">Plays a lecture video with live karaoke subtitles from its transcript. Videos stay on this device; transcripts can come from your private GitHub repository.</p>
+  <section id="recent" class="recent" hidden>
+    <h2>Recent</h2>
+    <ul id="recentList" class="recent-list"></ul>
+  </section>
   <div class="pickers">
     <label class="pick">
       <input type="file" id="pickVideo" accept="video/mp4,.mp4,video/*">
@@ -36,11 +40,11 @@
   <p class="hint drop">You can also drop both files here.</p>
   <div id="problems" class="problems" role="alert"></div>
   <button id="startBtn" class="primary" disabled>Open</button>
-  <p class="foot"><a href="playback-test.html">Playback test</a> · <span id="version"></span></p>
+  <p class="foot"><button type="button" id="ghLine" class="linkish">Connect GitHub</button> · <a href="playback-test.html">Playback test</a> · <span id="version"></span></p>
 </main>
 
 <div id="player" class="player" hidden>
-  <div class="video-box"><video id="video" playsinline preload="auto"></video></div>
+  <div class="video-box"><video id="video" playsinline preload="auto"></video><div id="flash" class="flash" aria-hidden="true"></div></div>
   <div id="panel" class="panel">
     <div id="prev" class="ctx prev"></div>
     <div id="cur" class="cur"></div>
@@ -92,6 +96,11 @@
       <p class="small">Used to choose natural places to split long sentences.</p>
     </fieldset>
     <fieldset>
+      <legend>Transcripts on GitHub</legend>
+      <p id="ghNote" class="small top"></p>
+      <button type="button" id="ghOpen">GitHub settings</button>
+    </fieldset>
+    <fieldset>
       <legend>Word fixes</legend>
       <ul id="fixList" class="fix-list"></ul>
       <button type="button" id="exportBtn">Export corrected transcript</button>
@@ -117,6 +126,24 @@
     <div class="dialog-buttons">
       <button type="button" id="speedNormal">Normal</button>
       <button value="close" class="primary">Done</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="ghDialog">
+  <form method="dialog">
+    <h2>Transcripts on GitHub</h2>
+    <p class="small top">The app finds each video's transcript in your private repository, and keeps word fixes there so all your devices share them.</p>
+    <label class="field">Repository
+      <input id="ghRepo" placeholder="owner/name" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
+    <label class="field">Token
+      <input id="ghToken" type="password" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
+    <p class="small">A fine-grained GitHub token for this repository only, with Contents: read and write. It stays on this device.</p>
+    <p id="ghStatus" class="small status" role="status"></p>
+    <div class="dialog-buttons">
+      <button type="button" id="ghRemove" class="left">Disconnect</button>
+      <button type="button" id="ghCancel">Cancel</button>
+      <button value="save" class="primary">Connect</button>
     </div>
   </form>
 </dialog>

@@ -33,7 +33,7 @@ def main() -> None:
                                 language=None, sync_offset_ms=None, fill=None)
         vvm.configure(ns)
         probe = vvm.probe_source(verbose=False)
-        words, data, _, changes = vvm.load_words(lambda *x: None)
+        words, data, _, changes = vvm.load_words(lambda *x: None, app_fixes=False)
         groups, _ = vvm.merge_short(vvm.split_sentences(words))
         cal = vvm.calibrate("".join(sorted({ch for w in words for ch in w.text if ord(ch) > 127})))
         m = vvm.Measure(cal)
