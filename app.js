@@ -14,7 +14,7 @@ import { STAGING, VIDEO_FILE, changedEntry, entryStatus, folderOf, groupByFolder
 import { applyDeltas, deltaFor, sameFixes } from "./core/sync.js";
 import * as store from "./core/store.js";
 
-const VERSION = "2.0.0";
+const VERSION = "2.0.1";
 // Proportions of the burned vertical video (identical in every pipeline calibration), in em of
 // the main subtitle text: line limit, frame width, and the height the three blocks need.
 const FIT_EM = 892.4 / 67.797, FRAME_EM = 1080 / 67.797, PANEL_EM = 14.4, CTX_SCALE = 74 / 93;
@@ -194,7 +194,7 @@ const openFolders = new Set();
 const BADGES = { ready: ["Ready", "ok"], pending: ["Transcribing", "busy"], failed: ["Failed", "bad"], null: ["Not transcribed", "none"] };
 /** Brings the list up to date (one load at a time: a second call gets the running one). */
 function loadLibrary() {
-  $("library").hidden = $("localHead").hidden = !dbx;
+  $("library").hidden = !dbx;
   if (!dbx) return Promise.resolve();
   if (!library.loading) {
     library.loading = (async () => {
@@ -681,23 +681,28 @@ function startAction(w, action) {
   action(w).catch((err) => { w.error = err.message; renderGet(); });
 }
 
-/** Puts the video in the index as waiting for its transcript (unless it has one by now) and starts
- *  the job for it; if the job can't be started from here, its next scheduled run finds the entry. */
+/** Puts the video in the index as waiting for its transcript (unless it has one by now, or the Mac
+ *  or the job is transcribing it already) and starts the job for it; if the job can't be started
+ *  from here, its next scheduled run finds the entry. */
 async function startJob(w, fields) {
   let entry = null;
   await gh.update("index.json", (cur) => {
     const videos = cur?.videos || [], had = videos.find((v) => v.fingerprint === fields.fingerprint);
-    if (had?.transcript) { entry = had; return undefined; }
+    // one being transcribed names its worker ("mac" or "github"): a new entry would drop that claim,
+    // and the video could be transcribed (and paid for) twice
+    if (had?.transcript || (had?.worker && entryStatus(had) === "pending")) { entry = had; return undefined; }
     entry = indexEntry({ ...fields, key: keyFor(fields.name, fields.fingerprint, videos), transcript: null,
       status: "pending", error: null, id: null, words: null, updated: isoNow() });
     return withEntry(cur, entry);
   }, `Transcribe ${fields.name}`);
   Object.assign(w, { entry, note: "", error: "" });
   if (entry.transcript) return transcriptArrived(w);
-  try {
-    await gh.dispatch(entry.key);
-  } catch (err) {
-    w.note = `${err.message} Its next scheduled run will transcribe it.`;
+  if (!entry.worker) {
+    try {
+      await gh.dispatch(entry.key);
+    } catch (err) {
+      w.note = `${err.message} Its next scheduled run will transcribe it.`;
+    }
   }
   startPolling();
   renderGet();
@@ -874,7 +879,8 @@ function getNodes(w, where) {
       actions(button(resumed("video", "Resume upload") ?? "Upload to Dropbox", () => askUpload(w)));
     }
   } else if (status === "pending" && !t) {
-    said(w.entry.staged && !w.entry.dropbox ? "Its audio is being transcribed on GitHub." : "Being transcribed on GitHub.");
+    said(w.entry.worker === "mac" ? "Being transcribed on the Mac."
+      : w.entry.staged && !w.entry.dropbox ? "Its audio is being transcribed on GitHub." : "Being transcribed on GitHub.");
     said(where === "settings" ? "" : where === "welcome" ? "Play it meanwhile: the subtitles appear when it's done, usually a few minutes after the job starts."
       : "The subtitles appear here when it's done, usually a few minutes after the job starts.", "small");
     if (w.note) said(w.note, "small");
@@ -925,7 +931,7 @@ $("transferStop").addEventListener("click", () => transfer?.abort.abort());
 // ---------------------------------------------------------------- recent lectures
 async function drawRecent() {
   const recs = (await store.list()).filter((r) => r.lastOpened && r.video && !r.hidden)
-    .sort((a, b) => b.lastOpened - a.lastOpened).slice(0, 8);
+    .sort((a, b) => b.lastOpened - a.lastOpened).slice(0, 3);
   $("recent").hidden = !recs.length;
   $("recentList").replaceChildren(...recs.map((r) => {
     const li = document.createElement("li");

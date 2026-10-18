@@ -11,13 +11,14 @@ iPhone/iPad with Share → Add to Home Screen, to watch full screen and offline)
 
 ## Use
 
-1. Tap a video in the Dropbox library, or pick the lecture video on this device (the original
-   16:9 file). If its transcript is in your GitHub repository or was opened on this device before,
+1. Pick the lecture video on this device (the original 16:9 file; the pickers are at the top of the
+   start screen), or tap a video in the Dropbox library further down. If its transcript is in your
+   GitHub repository or was opened on this device before,
    it plays right away. Otherwise the app offers to get one (below), or pick its `.json`. On
    iPhone/iPad pick files with *Choose File* (the Files app).
 2. Play. Tap any word, current or gray, to jump to it.
 
-Recent lectures are listed on the start screen with where you stopped. One streamed from Dropbox
+The three most recent lectures are listed under the pickers with where you stopped. One streamed from Dropbox
 streams again; for a file on the device a browser can't reopen it by itself, so tapping one opens
 the file picker (its Recents has the video).
 
@@ -45,9 +46,10 @@ correction format.
 
 ## Dropbox and transcription
 
-Once GitHub is connected and the repository has `config/dropbox.json` (written by `vvm.py
-dropbox-auth`: `{"app_key", "refresh_token"}` of the *Lecture Karaoke* Dropbox app, which sees only
-its own folder, Apps/Lecture Karaoke), the start screen lists the videos in that folder, a section
+Once GitHub is connected and the repository has `config/dropbox.json` (`{"app_key",
+"refresh_token"}` of the *Lecture Karaoke* Dropbox app, which sees only its own folder,
+Apps/Lecture Karaoke; approved once on the Mac with `vvm.py dropbox-auth`), the start screen lists,
+under the recent lectures, the videos in that folder, a section
 per course subfolder, with search and a badge each: *Ready*, *Transcribing*, *Not transcribed* or
 *Failed*. A tap streams the video (a temporary link, renewed before its 4 hours are up, or at once
 if the video stops on an expired link, keeping the position). Videos put in Dropbox from any device

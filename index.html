@@ -7,7 +7,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Karaoke">
-<meta name="app-version" content="2.0.0">
+<meta name="app-version" content="2.0.1">
 <meta name="description" content="Plays your lecture videos, from your device or your Dropbox, with live karaoke subtitles from their Soniox transcripts; new videos get transcribed on GitHub.">
 <title>Lecture Karaoke</title>
 <link rel="manifest" href="manifest.webmanifest">
@@ -20,20 +20,7 @@
 <main id="welcome" class="welcome">
   <h1>Lecture Karaoke</h1>
   <p class="intro">Plays a lecture video with live karaoke subtitles from its transcript. Videos come from this device or your Dropbox; transcripts come from your private GitHub repository, where new videos get transcribed.</p>
-  <section id="recent" class="recent" hidden>
-    <h2>Recent</h2>
-    <ul id="recentList" class="recent-list"></ul>
-  </section>
-  <section id="library" class="library" hidden>
-    <div class="lib-head">
-      <h2>Dropbox</h2>
-      <button type="button" id="libCheck" class="linkish" title="Start the transcription job now for videos added to Dropbox (it also runs on a schedule)">Check now</button>
-    </div>
-    <input type="search" id="libSearch" class="lib-search" placeholder="Search videos" aria-label="Search the videos in Dropbox" autocomplete="off" spellcheck="false">
-    <p id="libNote" class="small lib-note" role="status"></p>
-    <div id="libList" class="lib-list"></div>
-  </section>
-  <h2 id="localHead" class="local-head" hidden>On this device</h2>
+  <h2 id="localHead" class="local-head" hidden>On this device</h2><!-- unused since 2.0.1; 2.0.0's script looks it up -->
   <div class="pickers">
     <label class="pick">
       <input type="file" id="pickVideo" accept="video/mp4,.mp4,video/*">
@@ -51,6 +38,19 @@
   <p class="hint drop">You can also drop both files here.</p>
   <div id="problems" class="problems" role="alert"></div>
   <button id="startBtn" class="primary" disabled>Open</button>
+  <section id="recent" class="recent" hidden>
+    <h2>Recent</h2>
+    <ul id="recentList" class="recent-list"></ul>
+  </section>
+  <section id="library" class="library" hidden>
+    <div class="lib-head">
+      <h2>Dropbox</h2>
+      <button type="button" id="libCheck" class="linkish" title="Start the transcription job now for videos added to Dropbox (it also runs on a schedule)">Check now</button>
+    </div>
+    <input type="search" id="libSearch" class="lib-search" placeholder="Search videos" aria-label="Search the videos in Dropbox" autocomplete="off" spellcheck="false">
+    <p id="libNote" class="small lib-note" role="status"></p>
+    <div id="libList" class="lib-list"></div>
+  </section>
   <p class="foot"><button type="button" id="ghLine" class="linkish">Connect GitHub</button> · <a href="playback-test.html">Playback test</a> · <span id="version"></span></p>
 </main>
 
