@@ -7,7 +7,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Karaoke">
-<meta name="app-version" content="2.2.0">
+<meta name="app-version" content="2.3.0">
 <meta name="description" content="Plays your lecture videos and audio recordings, from your device or your Dropbox, with live karaoke subtitles from their Soniox transcripts; new ones get transcribed on GitHub.">
 <title>Lecture Karaoke</title>
 <link rel="manifest" href="manifest.webmanifest">
@@ -99,6 +99,7 @@
       <button id="forwardBtn" class="icon" data-el="forward" aria-label="Forward 5 seconds">+5s</button>
       <button id="speedBtn" class="chip" data-el="speed" aria-label="Playback speed" aria-haspopup="dialog">1×</button>
       <button id="leadBtn" class="chip" data-el="timing" aria-pressed="false" aria-label="Subtitle timing: exact, or the offset set in Settings">Exact</button>
+      <button id="hiBtn" class="chip" data-el="highlight" aria-pressed="false" aria-label="Soft highlight, set in Settings">Soft</button>
       <button id="editBtn" class="chip" data-el="fix" aria-pressed="false">Fix</button>
       <button id="moreBtn" class="icon" data-el="settings" aria-label="Settings">⋯</button>
       <button id="fsBtn" class="icon" data-el="fullscreen" aria-label="Full screen">⛶</button>
@@ -137,10 +138,15 @@
       <legend>Highlight</legend>
       <p class="small top">The color of the words already spoken. Kept on this device.</p>
       <div id="hiColors" class="swatches" role="radiogroup" aria-label="Highlight color"></div>
-      <div class="row"><label for="hiStrength">How much it stands out</label><output id="hiOut"></output></div>
-      <input type="range" id="hiStrength" min="20" max="100" step="5">
-      <div class="range-ends" aria-hidden="true"><span>Soft</span><span>Strong</span></div>
-      <p class="hi-sample" aria-hidden="true"><span class="on">Words already spoken</span> and the words to come</p>
+      <div class="hi-looks" role="radiogroup" aria-label="Full color or soft">
+        <label class="hi-look"><span class="hi-name"><input type="radio" name="hiLook" value="full"> Full color</span>
+          <span class="hi-sample" aria-hidden="true"><span class="on">Words already spoken</span> and the words to come</span></label>
+        <label class="hi-look"><span class="hi-name"><input type="radio" name="hiLook" value="soft"> Soft <output id="hiOut"></output></span>
+          <span class="hi-sample" aria-hidden="true"><span class="on">Words already spoken</span> and the words to come</span></label>
+      </div>
+      <input type="range" id="hiStrength" min="20" max="90" step="5" aria-label="How much of the color the soft highlight keeps">
+      <div class="range-ends" aria-hidden="true"><span>Softer</span><span>Stronger</span></div>
+      <p class="small">The <b>Soft</b> button in the bar switches between the two (key H).</p>
     </fieldset>
     <fieldset>
       <legend>Control bar</legend>

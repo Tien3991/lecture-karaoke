@@ -17,7 +17,7 @@ import { STAGING, changedEntry, entryStatus, folderOf, groupByFolder, indexEntry
 import { applyDeltas, deltaFor, sameFixes } from "./core/sync.js";
 import * as store from "./core/store.js";
 
-const VERSION = "2.2.0";
+const VERSION = "2.3.0";
 // Proportions of the burned vertical video (identical in every pipeline calibration), in em of
 // the main subtitle text: line limit, frame width, and the height the three blocks need.
 const FIT_EM = 892.4 / 67.797, FRAME_EM = 1080 / 67.797, PANEL_EM = 14.4, CTX_SCALE = 74 / 93;
@@ -64,16 +64,17 @@ const S = {
 
 // ---------------------------------------------------------------- viewer preferences
 // Kept on this device for every lecture: speed, the timing offset and whether it is on, the
-// video/subtitle split for each orientation, and the highlight color. (Position, sync, language
-// and fixes are kept per transcript in IndexedDB.) The key carries the app prefix: all Pages
-// projects share one origin.
+// video/subtitle split for each orientation, and the highlight (its color, the soft setting and
+// whether it is on). (Position, sync, language and fixes are kept per transcript in IndexedDB.)
+// The key carries the app prefix: all Pages projects share one origin.
 const PREFS_KEY = "lecture-karaoke.prefs";
 // Highlight presets, readable on black; yellow is the burned videos' color.
 const HI_COLORS = [["Yellow", "#ffe000"], ["Orange", "#fb923c"], ["Green", "#4ade80"], ["Blue", "#38bdf8"], ["Pink", "#f472b6"],
   ["Violet", "#a78bfa"]];
-const HI_SOFTEST = 20;   // % of the color at the soft end; the rest is the white of the words to come
+// The soft highlight keeps this % of the color, the rest the white of the words to come.
+const HI_SOFT_RANGE = [20, 90], HI_SOFT_DEFAULT = 40;
 const prefs = { rate: 1, offsetMs: 3000, offsetOn: false, split: { portrait: null, landscape: null }, bar: null, uploadFolder: "Uploads",
-  hi: { color: HI_COLORS[0][1], strength: 100 } };
+  hi: { color: HI_COLORS[0][1], soft: false, strength: HI_SOFT_DEFAULT } };
 try {
   const saved = JSON.parse(localStorage.getItem(PREFS_KEY) || "{}");
   Object.assign(prefs, saved, { split: { ...prefs.split, ...saved.split } });
@@ -84,8 +85,13 @@ prefs.rate = clamp(Number(prefs.rate) || 1, RATE_MIN, RATE_MAX);
 prefs.offsetMs = Number.isFinite(Number(prefs.offsetMs)) ? clamp(Number(prefs.offsetMs), -OFFSET_MAX_MS, OFFSET_MAX_MS) : 3000;
 prefs.offsetOn = prefs.offsetOn === true;
 for (const o of ["portrait", "landscape"]) if (!Number.isFinite(prefs.split[o])) prefs.split[o] = null;
-prefs.hi = { color: /^#[0-9a-f]{6}$/i.test(prefs.hi?.color) ? prefs.hi.color.toLowerCase() : HI_COLORS[0][1],
-  strength: clamp(Math.round(Number(prefs.hi?.strength) / 5) * 5 || 100, HI_SOFTEST, 100) };
+{
+  // 2.2.0 kept only a strength, 100 meaning full color: below that, the soft highlight was on.
+  const { color, soft, strength } = prefs.hi ?? {}, level = Math.round(Number(strength) / 5) * 5;
+  prefs.hi = { color: /^#[0-9a-f]{6}$/i.test(color) ? color.toLowerCase() : HI_COLORS[0][1],
+    soft: typeof soft === "boolean" ? soft : level > 0 && level < 100,
+    strength: level > 0 && level < 100 ? clamp(level, ...HI_SOFT_RANGE) : HI_SOFT_DEFAULT };
+}
 function savePrefs() {
   try { localStorage.setItem(PREFS_KEY, JSON.stringify(prefs)); } catch { /* storage unavailable */ }
 }
@@ -1263,13 +1269,14 @@ for (const ev of ["click", "keydown"]) addEventListener(ev, measureSound, true);
 video.addEventListener("play", () => { if (audioGraph && audioCtx.state !== "running") audioCtx.resume().catch(() => {}); });
 
 // ---------------------------------------------------------------- highlight color
-// The color of the words already spoken: a preset or any color, and how much it stands out. A
-// softer highlight is that color mixed with the white of the words still to come. The bars of a
-// recording follow it; the buttons keep the app's yellow.
-/** The words' highlight as #rrggbb: color at strength %, the rest white. */
-function highlightColor({ color, strength } = prefs.hi) {
-  const rgb = parseInt(color.slice(1), 16);
-  return "#" + [16, 8, 0].map((shift) => Math.round(255 - (255 - ((rgb >> shift) & 255)) * (strength / 100))
+// The color of the words already spoken: a preset or any color, in full or soft. The soft
+// highlight is that color mixed with the white of the words still to come, as much as Settings
+// says; the Soft button switches between the two. The bars of a recording follow it; the
+// buttons keep the app's yellow.
+/** The words' highlight as #rrggbb: the color, or when soft, strength % of it and the rest white. */
+function highlightColor({ color, soft, strength } = prefs.hi) {
+  const rgb = parseInt(color.slice(1), 16), keep = soft ? strength / 100 : 1;
+  return "#" + [16, 8, 0].map((shift) => Math.round(255 - (255 - ((rgb >> shift) & 255)) * keep)
     .toString(16).padStart(2, "0")).join("");
 }
 const hiCustom = el("input", { type: "color" });
@@ -1283,9 +1290,12 @@ $("hiColors").append(...HI_COLORS.map(([name, color]) => {
   return swatch;
 }), el("label", { className: "swatch custom", title: "Another color" }, hiCustom, el("span")));
 hiCustom.addEventListener("input", () => setHighlight({ color: hiCustom.value }));
-$("hiStrength").min = HI_SOFTEST;
+[$("hiStrength").min, $("hiStrength").max] = HI_SOFT_RANGE;
 $("hiStrength").addEventListener("input", () => setHighlight({ strength: Number($("hiStrength").value) }, false));
 $("hiStrength").addEventListener("change", savePrefs);
+const hiLooks = $("settings").querySelectorAll("input[name=hiLook]");
+for (const radio of hiLooks) radio.addEventListener("change", () => setHighlight({ soft: radio.value === "soft" }));
+$("hiBtn").addEventListener("click", () => setHighlight({ soft: !prefs.hi.soft }));
 
 function setHighlight(changes, keep = true) {
   prefs.hi = { ...prefs.hi, ...changes };
@@ -1293,7 +1303,7 @@ function setHighlight(changes, keep = true) {
   applyHighlight();
 }
 function applyHighlight() {
-  const c = highlightColor(), { color, strength } = prefs.hi, preset = HI_COLORS.some(([, p]) => p === color);
+  const c = highlightColor(), { color, soft, strength } = prefs.hi, preset = HI_COLORS.some(([, p]) => p === color);
   document.documentElement.style.setProperty("--said", c);
   viz.color = c;
   viz.draw();
@@ -1305,7 +1315,13 @@ function applyHighlight() {
   hiCustom.parentElement.style.setProperty("--c", preset ? "" : color);
   if (document.activeElement !== hiCustom) hiCustom.value = color;
   if (document.activeElement !== $("hiStrength")) $("hiStrength").value = strength;
-  $("hiOut").textContent = strength === 100 ? "full color" : `${strength}%`;
+  $("hiOut").textContent = `${strength}%`;
+  for (const radio of hiLooks) {   // each look shows its own sample
+    const look = radio.value === "soft";
+    radio.checked = look === soft;
+    radio.closest(".hi-look").querySelector(".on").style.color = highlightColor({ color, soft: look, strength });
+  }
+  $("hiBtn").setAttribute("aria-pressed", String(soft));
 }
 applyHighlight();
 
@@ -1365,6 +1381,7 @@ addEventListener("keydown", (e) => {
   else if (k === "arrowup" || k === "]") stepRate(1);
   else if (k === "arrowdown" || k === "[") stepRate(-1);
   else if (k === "l") $("leadBtn").click();
+  else if (k === "h") $("hiBtn").click();
   else if (k === "e") $("editBtn").click();
   else if (k === "f" && canFullscreen) $("fsBtn").click();
   else return;
@@ -1385,21 +1402,28 @@ panel.addEventListener("click", (e) => {
 // Two rows of parts (data-el in index.html), arranged by the viewer and kept on this device:
 // Settings → Arrange the buttons, then tap a part and move it. Settings itself can't be hidden,
 // so the bar can always be arranged again.
-const BAR_DEFAULT = { rows: [["progress", "fullscreen"], ["back", "rewind", "play", "forward", "speed", "timing", "fix", "settings"]], hidden: [] };
-const BAR_LABELS = { progress: "Progress bar", back: "Back", rewind: "−5s", play: "Play", forward: "+5s", speed: "Speed",
-  timing: "Timing", fix: "Fix", settings: "Settings", fullscreen: "Full screen" };
+const BAR_DEFAULT = { rows: [["progress", "highlight", "fullscreen"], ["back", "rewind", "play", "forward", "speed", "timing", "fix", "settings"]],
+  hidden: [] };
+const BAR_LABELS = { progress: "Progress bar", highlight: "Soft highlight", back: "Back", rewind: "−5s", play: "Play", forward: "+5s",
+  speed: "Speed", timing: "Timing", fix: "Fix", settings: "Settings", fullscreen: "Full screen" };
 // Kept here, not looked up: a part taken out of the bar is detached for a moment and couldn't be found.
 const PARTS = new Map([...bar.querySelectorAll("[data-el]")].map((el) => [el.dataset.el, el]));
 const barPart = (id) => PARTS.get(id);
 const canShow = (id) => id !== "fullscreen" || canFullscreen;   // no element full screen on iPhone
-/** The saved arrangement, made valid: every part exactly once (parts added later go to row 2). */
+/** The saved arrangement, made valid: every part exactly once. A part added in a later release goes
+ *  where the default bar has it, after the part it follows there (else at the end of that row). */
 function barConfig() {
   const c = prefs.bar?.rows ? prefs.bar : BAR_DEFAULT, seen = new Set();
   const take = (ids, ok = () => true) => (Array.isArray(ids) ? ids : [])
     .filter((id) => BAR_LABELS[id] && ok(id) && !seen.has(id) && seen.add(id));
   const rows = [take(c.rows[0]), take(c.rows[1])];
   const hidden = take(c.hidden, (id) => id !== "settings");
-  for (const id of Object.keys(BAR_LABELS)) if (!seen.has(id)) rows[1].push(id);
+  BAR_DEFAULT.rows.forEach((def, r) => def.forEach((id, i) => {
+    if (seen.has(id)) return;
+    const after = i ? rows[r].indexOf(def[i - 1]) : -1;
+    rows[r].splice(after < 0 ? rows[r].length : after + 1, 0, id);
+    seen.add(id);
+  }));
   return { rows, hidden };
 }
 let arranging = false, selected = null;

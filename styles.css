@@ -130,7 +130,7 @@ body.dragging .welcome { outline: 3px dashed var(--hi); outline-offset: -10px; }
 .cur, .ctx { position: absolute; left: 0; right: 0; text-align: center; white-space: nowrap; }
 .line { display: block; line-height: 1.3717; }
 .cur { top: 50%; transform: translateY(-50%); font-size: var(--em); color: #fff; }
-.cur .on, .hi-sample .on { color: var(--said); }
+.cur .on { color: var(--said); }
 .ctx { font-size: calc(var(--em) * 0.7957); color: var(--dim); }
 .prev { bottom: calc(50% + var(--em) * 3.3335); }
 .next { top: calc(50% + var(--em) * 3.3335); }
@@ -188,7 +188,7 @@ select, #editorText { width: 100%; padding: 10px; border-radius: 10px; border: 1
 .range-ends span:first-child { left: -10px; }
 .range-ends span:last-child { right: -10px; }
 .range-ends .one { left: 53.7%; transform: translateX(-50%); }   /* 1× on the logarithmic slider */
-/* the highlight: color swatches (the last one opens a color picker), and a sample line of subtitles */
+/* the highlight: color swatches (the last one opens a color picker), then full color and soft, each with a sample */
 .swatches { display: grid; grid-template-columns: repeat(7, minmax(24px, 34px)); gap: 10px; margin: 2px 0 12px; }   /* one row, even on a phone */
 .swatch { position: relative; aspect-ratio: 1; cursor: pointer; }
 .swatch input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; padding: 0; border: 0; opacity: 0; cursor: pointer; }
@@ -196,8 +196,13 @@ select, #editorText { width: 100%; padding: 10px; border-radius: 10px; border: 1
   background: var(--c, conic-gradient(#ff5b5b, #ffe000, #4ade80, #38bdf8, #a78bfa, #f472b6, #ff5b5b)); }
 .swatch.chosen span { outline: 2px solid #fff; outline-offset: 3px; }
 .swatch input:focus-visible + span { outline: 2px solid var(--hi); outline-offset: 3px; }
-.hi-sample { margin: 0; padding: 12px; border-radius: 10px; background: #000; color: #fff; text-align: center;
-  font: 700 18px/1.35 "LK Sans", Avenir Next, sans-serif; }
+.hi-looks { display: grid; gap: 12px; margin: 0 0 6px; }
+.hi-look { display: grid; gap: 6px; cursor: pointer; }
+.hi-name { display: flex; align-items: center; gap: 8px; font-size: 15px; }
+.hi-name input { margin: 0; accent-color: var(--hi); }
+.hi-name output { color: var(--dim); }
+.hi-sample { display: block; padding: 10px 12px; border-radius: 10px; background: #000; color: #fff; text-align: center;
+  font: 700 18px/1.35 "LK Sans", Avenir Next, sans-serif; text-wrap: balance; }
 .fix-list { list-style: none; margin: 0 0 8px; padding: 0; max-height: 30vh; overflow: auto; }
 .fix-list li { display: flex; justify-content: space-between; gap: 8px; padding: 4px 0; border-bottom: 1px solid #1c1c1c; }
 .fix-list li button { padding: 2px 8px; }
