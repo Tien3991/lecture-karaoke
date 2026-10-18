@@ -74,6 +74,12 @@ its 4 hours are up, or at once if it stops on an expired link, keeping the posit
 Dropbox from any device are transcribed by the job, `.github/workflows/transcribe.yml` in the
 repository: on its schedule, or right away with *Check now*.
 
+The job transcribes speech as English unless a folder name says otherwise. A folder whose name
+ends in `___` and a two-letter language code sets the language of everything in it, subfolders
+too: `Giải tích 1___vn` (or `___vi`) is Vietnamese, `___fr` French. The nearest such folder
+wins. New files are transcribed oldest first, and Dropbox counts a rename as a change, so a renamed
+folder's files go to the back of the line.
+
 *Select* deletes files from Dropbox: tap the files, then **Delete**, and confirm. Dropbox keeps
 deleted files for at least 30 days (restore them from *Deleted files* on dropbox.com). Their
 transcripts stay in the repository, so a file put back finds its transcript again, and a deleted
