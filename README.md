@@ -40,13 +40,19 @@ hide it (tap a button, then move it); the arrangement is kept on the device.
 | `1×` | playback speed, 0.2× to 4×: type a value, pick a preset, or use the slider |
 | `Exact` / `+3 s` | switch between exact timing and the offset set in ⋯ Settings (+ before the voice, to read ahead; − after it) |
 | `Fix` | tap a word to correct it (synced through GitHub when connected) |
-| `⋯` | settings: timing offset, sync fine-tune (±300 ms), layout, control bar, GitHub, language, the list of fixes, export |
+| `⋯` | settings: timing offset, sync fine-tune (±300 ms), layout, highlight color, control bar, GitHub, language, the list of fixes, export |
 | `⛶` | full screen, where the browser allows it (not iPhone) |
 | handle between video and subtitles | drag to resize them; portrait and landscape are kept separately (double-click, or ⋯ Settings → Automatic, to reset) |
 | keyboard | space play/pause, ←/→ 5 s, ↑/↓ preset speeds, `L` offset, `E` fix, `F` full screen |
 
 The app remembers, per transcript, where you stopped, the sync fine-tune, the language and your
-fixes; speed, offset and layout are remembered on the device for every lecture. **Export corrected
+fixes; speed, offset, layout and highlight are remembered on the device for every lecture.
+
+⋯ Settings → *Highlight* sets the color of the words already spoken. There are six colors that
+stand out on black (yellow, as in the burned videos, is the default), or pick any other color.
+*How much it stands out* runs from full color down to a soft tint (20%), the color mixed with the
+white of the words still to come. A soft highlight still shows where the voice is, without drawing
+the eye. A recording's bars take the same color. **Export corrected
 transcript** saves a corrected `.json` and a `transcript.txt` in the vertical_video_maker
 correction format.
 

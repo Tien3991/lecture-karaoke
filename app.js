@@ -17,7 +17,7 @@ import { STAGING, changedEntry, entryStatus, folderOf, groupByFolder, indexEntry
 import { applyDeltas, deltaFor, sameFixes } from "./core/sync.js";
 import * as store from "./core/store.js";
 
-const VERSION = "2.1.0";
+const VERSION = "2.2.0";
 // Proportions of the burned vertical video (identical in every pipeline calibration), in em of
 // the main subtitle text: line limit, frame width, and the height the three blocks need.
 const FIT_EM = 892.4 / 67.797, FRAME_EM = 1080 / 67.797, PANEL_EM = 14.4, CTX_SCALE = 74 / 93;
@@ -63,11 +63,17 @@ const S = {
 };
 
 // ---------------------------------------------------------------- viewer preferences
-// Kept on this device for every lecture: speed, the timing offset and whether it is on, and the
-// video/subtitle split for each orientation. (Position, sync, language and fixes are kept per
-// transcript in IndexedDB.) The key carries the app prefix: all Pages projects share one origin.
+// Kept on this device for every lecture: speed, the timing offset and whether it is on, the
+// video/subtitle split for each orientation, and the highlight color. (Position, sync, language
+// and fixes are kept per transcript in IndexedDB.) The key carries the app prefix: all Pages
+// projects share one origin.
 const PREFS_KEY = "lecture-karaoke.prefs";
-const prefs = { rate: 1, offsetMs: 3000, offsetOn: false, split: { portrait: null, landscape: null }, bar: null, uploadFolder: "Uploads" };
+// Highlight presets, readable on black; yellow is the burned videos' color.
+const HI_COLORS = [["Yellow", "#ffe000"], ["Orange", "#fb923c"], ["Green", "#4ade80"], ["Blue", "#38bdf8"], ["Pink", "#f472b6"],
+  ["Violet", "#a78bfa"]];
+const HI_SOFTEST = 20;   // % of the color at the soft end; the rest is the white of the words to come
+const prefs = { rate: 1, offsetMs: 3000, offsetOn: false, split: { portrait: null, landscape: null }, bar: null, uploadFolder: "Uploads",
+  hi: { color: HI_COLORS[0][1], strength: 100 } };
 try {
   const saved = JSON.parse(localStorage.getItem(PREFS_KEY) || "{}");
   Object.assign(prefs, saved, { split: { ...prefs.split, ...saved.split } });
@@ -78,6 +84,8 @@ prefs.rate = clamp(Number(prefs.rate) || 1, RATE_MIN, RATE_MAX);
 prefs.offsetMs = Number.isFinite(Number(prefs.offsetMs)) ? clamp(Number(prefs.offsetMs), -OFFSET_MAX_MS, OFFSET_MAX_MS) : 3000;
 prefs.offsetOn = prefs.offsetOn === true;
 for (const o of ["portrait", "landscape"]) if (!Number.isFinite(prefs.split[o])) prefs.split[o] = null;
+prefs.hi = { color: /^#[0-9a-f]{6}$/i.test(prefs.hi?.color) ? prefs.hi.color.toLowerCase() : HI_COLORS[0][1],
+  strength: clamp(Math.round(Number(prefs.hi?.strength) / 5) * 5 || 100, HI_SOFTEST, 100) };
 function savePrefs() {
   try { localStorage.setItem(PREFS_KEY, JSON.stringify(prefs)); } catch { /* storage unavailable */ }
 }
@@ -1196,7 +1204,7 @@ let audioCtx = null, audioGraph = null;   // audioGraph: {analyser} once the ele
 const viz = new Visualizer($("viz"), video, {
   analyser: () => audioGraph?.analyser ?? null,
   speech: () => (S.words.length ? { words: S.words, shiftMs: S.audioOffsetMs + S.syncMs } : null),
-  color: getComputedStyle(document.documentElement).getPropertyValue("--hi").trim() || "#ffe000",
+  color: highlightColor(),
 });
 let look = { art: null, url: "", failed: false };
 
@@ -1253,6 +1261,53 @@ function measureSound() {
 }
 for (const ev of ["click", "keydown"]) addEventListener(ev, measureSound, true);
 video.addEventListener("play", () => { if (audioGraph && audioCtx.state !== "running") audioCtx.resume().catch(() => {}); });
+
+// ---------------------------------------------------------------- highlight color
+// The color of the words already spoken: a preset or any color, and how much it stands out. A
+// softer highlight is that color mixed with the white of the words still to come. The bars of a
+// recording follow it; the buttons keep the app's yellow.
+/** The words' highlight as #rrggbb: color at strength %, the rest white. */
+function highlightColor({ color, strength } = prefs.hi) {
+  const rgb = parseInt(color.slice(1), 16);
+  return "#" + [16, 8, 0].map((shift) => Math.round(255 - (255 - ((rgb >> shift) & 255)) * (strength / 100))
+    .toString(16).padStart(2, "0")).join("");
+}
+const hiCustom = el("input", { type: "color" });
+hiCustom.setAttribute("aria-label", "Another color");
+$("hiColors").append(...HI_COLORS.map(([name, color]) => {
+  const radio = el("input", { type: "radio", name: "hiColor", value: color });
+  radio.setAttribute("aria-label", name);
+  radio.addEventListener("change", () => setHighlight({ color }));
+  const swatch = el("label", { className: "swatch", title: name }, radio, el("span"));
+  swatch.style.setProperty("--c", color);
+  return swatch;
+}), el("label", { className: "swatch custom", title: "Another color" }, hiCustom, el("span")));
+hiCustom.addEventListener("input", () => setHighlight({ color: hiCustom.value }));
+$("hiStrength").min = HI_SOFTEST;
+$("hiStrength").addEventListener("input", () => setHighlight({ strength: Number($("hiStrength").value) }, false));
+$("hiStrength").addEventListener("change", savePrefs);
+
+function setHighlight(changes, keep = true) {
+  prefs.hi = { ...prefs.hi, ...changes };
+  if (keep) savePrefs();
+  applyHighlight();
+}
+function applyHighlight() {
+  const c = highlightColor(), { color, strength } = prefs.hi, preset = HI_COLORS.some(([, p]) => p === color);
+  document.documentElement.style.setProperty("--said", c);
+  viz.color = c;
+  viz.draw();
+  for (const radio of $("hiColors").querySelectorAll("input[type=radio]")) {
+    radio.checked = radio.value === color;
+    radio.parentElement.classList.toggle("chosen", radio.checked);
+  }
+  hiCustom.parentElement.classList.toggle("chosen", !preset);
+  hiCustom.parentElement.style.setProperty("--c", preset ? "" : color);
+  if (document.activeElement !== hiCustom) hiCustom.value = color;
+  if (document.activeElement !== $("hiStrength")) $("hiStrength").value = strength;
+  $("hiOut").textContent = strength === 100 ? "full color" : `${strength}%`;
+}
+applyHighlight();
 
 // The MP4's own caption track would be drawn over the app by Safari: keep it off.
 const captionsOff = () => { for (const t of video.textTracks) t.mode = "disabled"; };

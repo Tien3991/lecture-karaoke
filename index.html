@@ -7,7 +7,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Karaoke">
-<meta name="app-version" content="2.1.0">
+<meta name="app-version" content="2.2.0">
 <meta name="description" content="Plays your lecture videos and audio recordings, from your device or your Dropbox, with live karaoke subtitles from their Soniox transcripts; new ones get transcribed on GitHub.">
 <title>Lecture Karaoke</title>
 <link rel="manifest" href="manifest.webmanifest">
@@ -132,6 +132,15 @@
       <input type="range" id="split" min="15" max="85" step="1">
       <div class="row"><p class="small">Portrait and landscape are set separately. You can also drag the handle between the video and the subtitles.</p>
         <button type="button" id="splitReset">Automatic</button></div>
+    </fieldset>
+    <fieldset>
+      <legend>Highlight</legend>
+      <p class="small top">The color of the words already spoken. Kept on this device.</p>
+      <div id="hiColors" class="swatches" role="radiogroup" aria-label="Highlight color"></div>
+      <div class="row"><label for="hiStrength">How much it stands out</label><output id="hiOut"></output></div>
+      <input type="range" id="hiStrength" min="20" max="100" step="5">
+      <div class="range-ends" aria-hidden="true"><span>Soft</span><span>Strong</span></div>
+      <p class="hi-sample" aria-hidden="true"><span class="on">Words already spoken</span> and the words to come</p>
     </fieldset>
     <fieldset>
       <legend>Control bar</legend>
