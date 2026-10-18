@@ -7,7 +7,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Karaoke">
-<meta name="app-version" content="2.3.0">
+<meta name="app-version" content="2.4.0">
 <meta name="description" content="Plays your lecture videos and audio recordings, from your device or your Dropbox, with live karaoke subtitles from their Soniox transcripts; new ones get transcribed on GitHub.">
 <title>Lecture Karaoke</title>
 <link rel="manifest" href="manifest.webmanifest">
@@ -45,11 +45,19 @@
   <section id="library" class="library" hidden>
     <div class="lib-head">
       <h2>Dropbox</h2>
-      <button type="button" id="libCheck" class="linkish" title="Start the transcription job now for files added to Dropbox (it also runs on a schedule)">Check now</button>
+      <span class="lib-links">
+        <button type="button" id="libCheck" class="linkish" title="Start the transcription job now for files added to Dropbox (it also runs on a schedule)">Check now</button>
+        <button type="button" id="libSelect" class="linkish" title="Choose files to delete from Dropbox">Select</button>
+      </span>
     </div>
     <input type="search" id="libSearch" class="lib-search" placeholder="Search" aria-label="Search the lectures in Dropbox" autocomplete="off" spellcheck="false">
     <p id="libNote" class="small lib-note" role="status"></p>
     <div id="libList" class="lib-list"></div>
+    <!-- Select mode: tapping files chooses them; Delete asks first (app.js deleteChosen). -->
+    <div id="libPick" class="lib-pick" hidden>
+      <span id="libPicked" role="status"></span>
+      <button type="button" id="libDelete" class="danger" disabled>Delete</button>
+    </div>
   </section>
   <p class="foot"><button type="button" id="ghLine" class="linkish">Connect GitHub</button> · <a href="playback-test.html">Playback test</a> · <span id="version"></span></p>
 </main>
@@ -102,7 +110,17 @@
       <button id="hiBtn" class="chip" data-el="highlight" aria-pressed="false" aria-label="Soft highlight, set in Settings">Soft</button>
       <button id="editBtn" class="chip" data-el="fix" aria-pressed="false">Fix</button>
       <button id="moreBtn" class="icon" data-el="settings" aria-label="Settings">⋯</button>
+      <button id="lockBtn" class="icon" data-el="lock" aria-label="Lock the screen against touches"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 11V8a4 4 0 0 1 8 0v3" fill="none" stroke="currentColor" stroke-width="2.2"/><rect x="5" y="11" width="14" height="10" rx="2.5" fill="currentColor"/></svg></button>
       <button id="fsBtn" class="icon" data-el="fullscreen" aria-label="Full screen">⛶</button>
+    </div>
+  </div>
+  <!-- Touch lock (app.js setLocked): covers the player so nothing takes a touch; the lock has to be slid to the right. -->
+  <div id="lock" class="lock" hidden>
+    <div id="unlock" class="unlock">
+      <span class="unlock-text" aria-hidden="true">Slide to unlock</span>
+      <svg class="unlock-end" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 11V8a4 4 0 0 1 7.75-1.4" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/><rect x="5" y="11" width="14" height="10" rx="2.5" fill="currentColor"/></svg>
+      <span id="unlockKnob" class="unlock-knob" role="slider" tabindex="0" aria-label="Locked: slide to the right to unlock"
+        aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 11V8a4 4 0 0 1 8 0v3" fill="none" stroke="currentColor" stroke-width="2.2"/><rect x="5" y="11" width="14" height="10" rx="2.5" fill="currentColor"/></svg></span>
     </div>
   </div>
 </div>
@@ -176,6 +194,20 @@
     <div class="dialog-buttons">
       <button type="button" id="openOther">Start screen</button>
       <button value="close" class="primary">Done</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="delDialog">
+  <form method="dialog">
+    <h2 id="delTitle">Delete from Dropbox?</h2>
+    <ul id="delList" class="del-list"></ul>
+    <p id="delBusy" class="small" hidden></p>
+    <p class="small">Dropbox keeps deleted files for at least 30 days: you can restore them from <b>Deleted files</b> on dropbox.com.
+      Their transcripts stay on GitHub, so a file put back finds its transcript again.</p>
+    <div class="dialog-buttons">
+      <button value="cancel" autofocus>Cancel</button>
+      <button value="delete" class="danger">Delete</button>
     </div>
   </form>
 </dialog>

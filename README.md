@@ -28,8 +28,8 @@ The three most recent lectures are listed under the pickers with where you stopp
 streams again; for a file on the device a browser can't reopen it by itself, so tapping one opens
 the file picker (its Recents has the video).
 
-The control bar has two rows: by default the progress bar, **Soft** and full screen on top, and the
-other buttons below. ⋯ Settings → *Arrange the buttons* lets you move any button left or right or to
+The control bar has two rows: by default the progress bar, **Soft**, the lock and full screen on
+top, and the other buttons below. ⋯ Settings → *Arrange the buttons* lets you move any button left or right or to
 the other row, or hide it (tap a button, then move it); the arrangement is kept on the device. A
 button added in a later release appears where the default bar has it.
 
@@ -41,6 +41,7 @@ button added in a later release appears where the default bar has it.
 | `1×` | playback speed, 0.2× to 4×: type a value, pick a preset, or use the slider |
 | `Exact` / `+3 s` | switch between exact timing and the offset set in ⋯ Settings (+ before the voice, to read ahead; − after it) |
 | `Soft` | switch the highlight between full color and the soft setting in ⋯ Settings (lit while soft) |
+| lock | lock the screen against touches while the lecture plays: nothing under it reacts, and the bar dims. A touch shows *Slide to unlock*: slide the lock all the way to the right and let go there (stopping short, or wandering off the track, leaves it locked). The keyboard still works; on the slider, → moves it a quarter at a time |
 | `Fix` | tap a word to correct it (synced through GitHub when connected) |
 | `⋯` | settings: timing offset, sync fine-tune (±300 ms), layout, highlight, control bar, GitHub, language, the list of fixes, export |
 | `⛶` | full screen, where the browser allows it (not iPhone) |
@@ -68,10 +69,16 @@ Once GitHub is connected and the repository has `config/dropbox.json` (`{"app_ke
 Apps/Lecture Karaoke; approved once on the Mac with `vvm.py dropbox-auth`), the start screen lists,
 under the recent lectures, the videos and recordings in that folder, a section
 per course subfolder, with search and a badge each: *Ready*, *Transcribing*, *Not transcribed* or
-*Failed*. A tap streams the file (a temporary link, renewed before its 4 hours are up, or at once
-if it stops on an expired link, keeping the position). Files put in Dropbox from any device are
-transcribed by the job, `.github/workflows/transcribe.yml` in the repository: on its schedule,
-or right away with *Check now*.
+*Failed*. A long name takes two lines. A tap streams the file (a temporary link, renewed before
+its 4 hours are up, or at once if it stops on an expired link, keeping the position). Files put in
+Dropbox from any device are transcribed by the job, `.github/workflows/transcribe.yml` in the
+repository: on its schedule, or right away with *Check now*.
+
+*Select* deletes files from Dropbox: tap the files, then **Delete**, and confirm. Dropbox keeps
+deleted files for at least 30 days (restore them from *Deleted files* on dropbox.com). Their
+transcripts stay in the repository, so a file put back finds its transcript again, and a deleted
+file leaves the recent list too. A file still being transcribed can be deleted, but that
+transcription may then fail.
 
 A file picked on the device is looked up in Dropbox (same size, confirmed by Dropbox's content
 hash, computed once per file and kept), and then:
@@ -161,10 +168,11 @@ Plain HTML, CSS and ES modules; no build step.
 - `npm test` checks the subtitle logic, video fingerprints and fix merging against fixtures from the
   pipeline (`dev/make_fixtures.py`; they contain transcripts, so they live outside this repository),
   and the Dropbox side against the mocks: content hashes (Dropbox's published example, downloaded
-  to a temporary folder), listing, links, resumed uploads, library matching, dispatch and an
-  `index.json` past 1 MB; and `core/media.js`, telling files apart and finding cover art (ID3
+  to a temporary folder), listing, links, deleting, resumed uploads, library matching, dispatch and
+  an `index.json` past 1 MB; and `core/media.js`, telling files apart and finding cover art (ID3
   2.2-2.4, FLAC, WAV, MP4 `covr`), also in files made by ffmpeg. The audio copy is checked by decoding with ffmpeg (`FFMPEG`, `FFPROBE`;
-  a lecture video in the parent folder, or `LECTURE12`); those tests are skipped without them.
+  a lecture video in the parent folder, or `LECTURE12`); those tests are skipped without them, as
+  are the MP4 reader and fingerprint checks when the fixtures' videos aren't at their paths.
 - Releasing: change the version in `app.js`, `sw.js` and the `app-version` meta of `index.html`
   (`npm test` checks they match), then push. Installed apps show a "new version" banner; the page
   and its scripts always come from the same release's cache. Keep element ids that older releases'

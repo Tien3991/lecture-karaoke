@@ -18,8 +18,9 @@
 // dropbox.json then names the test app key "test-app-key" and refresh token
 // "test-refresh-token"): access tokens, list_folder and its continue (paged, with change
 // cursors), get_temporary_link (a /mock-dropbox/media/ URL with Range support), get_metadata,
-// download with Range, and upload sessions, whose parts go to a scratch folder and are moved into
-// DIR when finished. For tests: POST /mock-dropbox/__config {tokenTtl, linkTtl (seconds),
+// delete_v2 (it really deletes from DIR; a symbolic link goes, never what it points to), download
+// with Range, and upload sessions, whose parts go to a scratch folder and are moved into DIR when
+// finished. For tests: POST /mock-dropbox/__config {tokenTtl, linkTtl (seconds),
 // pageSize}, POST /mock-dropbox/__expire {tokens, links}, POST /mock-dropbox/__fault {call,
 // mode: "drop" | "lose-reply", count}, GET /mock-dropbox/__stats.
 //
@@ -27,8 +28,8 @@
 // Tests import createServer() and listen on a free port.
 import http from "node:http";
 import { createHash, randomBytes } from "node:crypto";
-import { closeSync, copyFileSync, createReadStream, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync,
-  readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { closeSync, copyFileSync, createReadStream, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync,
+  readdirSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -261,6 +262,14 @@ function dropboxMock(dir, shared, scratch) {
       return snapshot(now, changes, s.limit);
     },
     "files/get_metadata": ({ path: p }) => { const f = find(p); return f ? { status: 200, body: meta(f) } : notFound; },
+    "files/delete_v2": ({ path: p }) => {
+      const e = walk().find((x) => x.rel.toLowerCase() === String(p).toLowerCase());
+      if (!e) return { status: 409, body: { error_summary: "path_lookup/not_found/..", error: { ".tag": "path_lookup", path_lookup: { ".tag": "not_found" } } } };
+      const metadata = meta(e);
+      if (lstatSync(e.full).isDirectory()) rmSync(e.full, { recursive: true });
+      else unlinkSync(e.full);   // a symbolic link goes, never the file it points to
+      return { status: 200, body: { metadata } };
+    },
     "files/get_temporary_link": ({ path: p }, req) => {
       const f = find(p);
       if (!f) return notFound;

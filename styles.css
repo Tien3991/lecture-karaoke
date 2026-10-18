@@ -23,6 +23,7 @@ button { padding: 9px 14px; border-radius: 10px; border: 1px solid var(--line); 
 button:active { background: #333; }
 button.primary { background: var(--hi); color: #000; border-color: var(--hi); font-weight: 600; }
 button:disabled { opacity: 0.4; cursor: default; }
+button.danger { background: #4a1616; color: #ffc9c9; border-color: #6e2222; font-weight: 600; }
 a { color: var(--fg); }
 
 /* ---------------------------------------------------------------- welcome */
@@ -45,7 +46,9 @@ body.dragging .welcome { outline: 3px dashed var(--hi); outline-offset: -10px; }
 .recent-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
 .recent-list li { display: flex; gap: 8px; }
 .recent-open { flex: 1; min-width: 0; display: grid; gap: 2px; text-align: left; padding: 12px 14px; border-radius: 14px; background: #0e0e0e; }
-.recent-title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* a long name takes two lines, then ends in … (names without spaces break anywhere) */
+.recent-title, .lib-title { font-weight: 600; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2;
+  overflow: hidden; overflow-wrap: anywhere; }
 .recent-meta { color: var(--dim); font-size: 13px; }
 .recent-del { flex: none; width: 44px; padding: 0; border-radius: 14px; color: var(--dim); background: #0e0e0e; }
 .linkish { padding: 0; border: 0; background: none; color: var(--fg); text-decoration: underline; border-radius: 0; }
@@ -54,6 +57,7 @@ body.dragging .welcome { outline: 3px dashed var(--hi); outline-offset: -10px; }
 /* ---------------------------------------------------------------- the Dropbox library: folders of videos with their state */
 .library h2, .local-head { font-size: 15px; font-weight: 600; color: var(--dim); margin: 22px 0 8px; }
 .lib-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.lib-links { display: flex; gap: 14px; }
 .lib-head .linkish { font-size: 14px; color: var(--dim); }
 .lib-search { width: 100%; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--line); background: #000; font-size: 16px; }
 .lib-note { margin: 6px 0 8px; }
@@ -62,9 +66,25 @@ body.dragging .welcome { outline: 3px dashed var(--hi); outline-offset: -10px; }
 .lib-folder > summary { padding: 12px 14px; cursor: pointer; font-weight: 600; overflow-wrap: anywhere; }
 .lib-count { color: var(--dim); font-weight: 400; }
 .lib-items { list-style: none; margin: 0; padding: 0 6px 6px; display: grid; gap: 4px; }
-.lib-item { width: 100%; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 10px; text-align: left; padding: 10px; border: 0; border-radius: 10px; background: #161616; }
-.lib-title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.lib-meta { grid-column: 1 / -1; color: var(--dim); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lib-item { width: 100%; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 10px; text-align: left; padding: 10px; border: 0; border-radius: 10px; background: #161616; }
+.lib-item .lib-title { grid-column: 1 / -1; }   /* the whole width for the name; the state goes on the line below */
+.lib-item .badge { grid-row: 2; grid-column: -2; }
+.lib-meta { grid-row: 2; grid-column: 1; align-self: center; color: var(--dim); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* select mode: a circle to tick in front of each file, and the Delete bar kept in view at the bottom */
+.lib-item.picking { grid-template-columns: auto minmax(0, 1fr) auto; }
+.lib-item.picking .lib-title { grid-column: 2 / -1; }
+.lib-item.picking .lib-meta { grid-column: 2; }
+.lib-tick { grid-row: 1 / span 2; grid-column: 1; align-self: center; width: 22px; height: 22px; border-radius: 50%; border: 2px solid #555; }
+.lib-item[aria-pressed="true"] { background: #2a2410; }
+.lib-item[aria-pressed="true"] .lib-tick { border-color: var(--hi); background: var(--hi) no-repeat center / 14px
+  url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M3 8.5l3.2 3L13 4.5' fill='none' stroke='%23000' stroke-width='2.4'/%3E%3C/svg%3E"); }
+.lib-pick { position: sticky; bottom: calc(10px + env(safe-area-inset-bottom)); z-index: 2; display: flex; align-items: center; gap: 10px;
+  margin-top: 10px; padding: 8px 8px 8px 16px; border-radius: 14px; background: #222; box-shadow: 0 6px 24px rgba(0,0,0,.6); }
+.lib-pick[hidden] { display: none; }
+.lib-pick span { flex: 1; min-width: 0; }
+.del-list { margin: 0 0 10px; padding-left: 20px; overflow-wrap: anywhere; max-height: 40vh; overflow: auto; }
+.del-list li { margin: 3px 0; }
+.del-list .more { list-style: none; color: var(--dim); }
 .badge { align-self: center; padding: 2px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; white-space: nowrap; }
 .badge.ok { background: #1d3320; color: #9be3a4; }
 .badge.busy { background: #363010; color: var(--hi); }
@@ -146,6 +166,7 @@ body.dragging .welcome { outline: 3px dashed var(--hi); outline-offset: -10px; }
 .bar .back { font-size: 24px; line-height: 1; padding: 5px 12px 7px; }
 .bar .chip { padding: 7px 10px; font-size: 14px; white-space: nowrap; }
 .bar .chip[aria-pressed="true"] { background: var(--hi); color: #000; border-color: var(--hi); }
+.bar .icon svg { display: block; width: 18px; height: 18px; margin: 0 auto; }
 .progress { flex: 1 1 160px; display: flex; align-items: center; gap: 8px; min-width: 0; }
 .progress input[type=range] { flex: 1; min-width: 60px; accent-color: var(--hi); }
 .time { font-variant-numeric: tabular-nums; font-size: 13px; color: var(--dim); white-space: nowrap; }
@@ -224,3 +245,20 @@ select, #editorText { width: 100%; padding: 10px; border-radius: 10px; border: 1
 .transfer[hidden] { display: none; }
 .transfer span { overflow: hidden; text-overflow: ellipsis; }
 .transfer button { padding: 4px 10px; }
+
+/* ---------------------------------------------------------------- touch lock: nothing under it takes a touch, and a touch shows
+   the slider; the lock has to be slid to the right end (app.js setLocked) */
+.lock { position: fixed; inset: 0; z-index: 20; touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+.lock[hidden] { display: none; }
+.player.locked .bar { opacity: 0.3; }
+.unlock { position: absolute; left: 50%; bottom: calc(12px + env(safe-area-inset-bottom)); width: min(340px, calc(100% - 32px)); height: 62px;
+  transform: translateX(-50%); border-radius: 31px; background: rgba(24, 24, 24, 0.94); border: 1px solid #444;
+  box-shadow: 0 6px 28px rgba(0, 0, 0, 0.7); opacity: 0; visibility: hidden; transition: opacity 0.4s, visibility 0.4s; }
+.unlock.show { opacity: 1; visibility: visible; transition: opacity 0.15s; }
+.unlock-text { position: absolute; inset: 0; display: grid; place-items: center; padding: 0 52px 0 64px; color: #bbb; font-size: 16px; }
+.unlock-end { position: absolute; right: 20px; top: 50%; width: 24px; height: 24px; margin-top: -12px; color: #9be3a4; }
+.unlock-knob { position: absolute; left: 5px; top: 5px; width: 52px; height: 52px; display: grid; place-items: center; border-radius: 50%;
+  background: var(--hi); color: #000; cursor: grab; touch-action: none; }
+.unlock-knob svg { width: 24px; height: 24px; }
+.unlock-knob.back { transition: transform 0.25s ease-out; }
+.unlock-knob:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }

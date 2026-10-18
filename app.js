@@ -17,7 +17,7 @@ import { STAGING, changedEntry, entryStatus, folderOf, groupByFolder, indexEntry
 import { applyDeltas, deltaFor, sameFixes } from "./core/sync.js";
 import * as store from "./core/store.js";
 
-const VERSION = "2.3.0";
+const VERSION = "2.4.0";
 // Proportions of the burned vertical video (identical in every pipeline calibration), in em of
 // the main subtitle text: line limit, frame width, and the height the three blocks need.
 const FIT_EM = 892.4 / 67.797, FRAME_EM = 1080 / 67.797, PANEL_EM = 14.4, CTX_SCALE = 74 / 93;
@@ -205,8 +205,10 @@ async function dropboxFiles() {
 
 // ---------------------------------------------------------------- the Dropbox library (start screen)
 // The videos in Dropbox by folder, each with what the repository knows of it: ready, being
-// transcribed, not transcribed yet, or failed (core/library.js matches them). A tap streams it.
+// transcribed, not transcribed yet, or failed (core/library.js matches them). A tap streams it;
+// in select mode a tap chooses it, to delete the chosen files from Dropbox.
 const library = { items: [], loading: null, opening: false, note: "", watchUntil: 0 };
+const picking = { on: false, paths: new Set(), busy: "" };   // select mode: the chosen files' paths; busy: progress
 const openFolders = new Set();
 const BADGES = { ready: ["Ready", "ok"], pending: ["Transcribing", "busy"], failed: ["Failed", "bad"], null: ["Not transcribed", "none"] };
 /** Brings the list up to date (one load at a time: a second call gets the running one). */
@@ -233,6 +235,7 @@ function loadLibrary() {
 const mb = (bytes) => `${bytes >= 1e9 ? (bytes / 1e9).toFixed(1) : Math.max(1, Math.round(bytes / 1e6))} ${bytes >= 1e9 ? "GB" : "MB"}`;
 function drawLibrary() {
   const q = $("libSearch").value.trim(), items = searchLibrary(library.items, q), groups = groupByFolder(items);
+  for (const p of picking.paths) if (!library.items.some((i) => i.path === p)) picking.paths.delete(p);
   const n = library.items.length, busy = library.items.filter((i) => i.status === "pending").length;
   const audio = library.items.filter((i) => i.audio).length, videos = n - audio;
   const count = [videos && `${videos} video${videos === 1 ? "" : "s"}`, audio && `${audio} audio file${audio === 1 ? "" : "s"}`].filter(Boolean).join(" and ");
@@ -252,7 +255,12 @@ function drawLibrary() {
       b.append(Object.assign(document.createElement("span"), { className: "lib-title", textContent: it.name.replace(/\.[^.]+$/, "") }),
         Object.assign(document.createElement("span"), { className: `badge ${cls}`, textContent: label }),
         Object.assign(document.createElement("span"), { className: "lib-meta", textContent: meta.filter(Boolean).join(" · ") }));
-      b.addEventListener("click", () => openFromDropbox(it));
+      if (picking.on) {
+        b.classList.add("picking");
+        b.setAttribute("aria-pressed", String(picking.paths.has(it.path)));
+        b.prepend(Object.assign(document.createElement("span"), { className: "lib-tick" }));
+      }
+      b.addEventListener("click", () => (picking.on ? pick(it, b) : openFromDropbox(it)));
       const li = document.createElement("li");
       li.append(b);
       return li;
@@ -260,8 +268,79 @@ function drawLibrary() {
     d.append(summary, ul);
     return d;
   }));
+  drawPick();
 }
 $("libSearch").addEventListener("input", drawLibrary);
+
+// ---------------------------------------------------------------- deleting files from Dropbox
+// Select, tap the files, Delete, and confirm. Dropbox keeps deleted files for at least 30 days
+// (restored from dropbox.com); their transcripts stay in the repository, so a file put back is
+// matched again. A deleted file also leaves the recent list.
+function pick(it, b) {
+  if (picking.busy) return;
+  if (!picking.paths.delete(it.path)) picking.paths.add(it.path);
+  b.setAttribute("aria-pressed", String(picking.paths.has(it.path)));
+  drawPick();
+}
+function drawPick() {
+  const n = picking.paths.size;
+  $("libSelect").textContent = picking.on ? "Cancel" : "Select";
+  $("libSelect").hidden = !library.items.length && !picking.on;
+  $("libSelect").disabled = !!picking.busy;
+  $("libPick").hidden = !picking.on;
+  $("libPicked").textContent = picking.busy || (n ? `${n} selected` : "Tap the files to delete.");
+  $("libDelete").disabled = !n || !!picking.busy;
+}
+$("libSelect").addEventListener("click", () => {
+  picking.on = !picking.on;
+  picking.paths.clear();
+  drawLibrary();
+});
+let chosen = [];
+$("libDelete").addEventListener("click", () => {
+  chosen = library.items.filter((i) => picking.paths.has(i.path));
+  const n = chosen.length, busy = chosen.filter((i) => i.status === "pending"), li = (props) => Object.assign(document.createElement("li"), props);
+  if (!n) return;
+  $("delTitle").textContent = n === 1 ? "Delete this file from Dropbox?" : `Delete these ${n} files from Dropbox?`;
+  $("delList").replaceChildren(...chosen.slice(0, 8).map((i) => li({ textContent: i.path.slice(1) })),
+    ...(n > 8 ? [li({ className: "more", textContent: `and ${n - 8} more` })] : []));
+  $("delBusy").hidden = !busy.length;
+  $("delBusy").textContent = busy.length === 1 ? `“${busy[0].name}” is still being transcribed: without the file, that may fail.`
+    : `${busy.length} of them are still being transcribed: without their files, that may fail.`;
+  $("delDialog").returnValue = "";
+  $("delDialog").showModal();
+});
+$("delDialog").addEventListener("close", () => { if ($("delDialog").returnValue === "delete") deleteChosen(chosen); });
+async function deleteChosen(items) {
+  const failed = [];
+  for (const [n, it] of items.entries()) {
+    picking.busy = `Deleting ${n + 1} of ${items.length}…`;
+    drawPick();
+    try {
+      await dbx.remove(it.path);
+      library.items = library.items.filter((i) => i.path !== it.path);
+      picking.paths.delete(it.path);
+      await forgetRecent(it.path);
+    } catch (err) {
+      failed.push(err.message);
+    }
+  }
+  picking.busy = "";
+  picking.on = failed.length > 0;   // the ones that failed stay chosen, to try again
+  toast(failed.length ? `Couldn't delete ${failed.length} of ${items.length}: ${failed[0]}`
+    : items.length === 1 ? `Deleted “${items[0].name}” from Dropbox.` : `Deleted ${items.length} files from Dropbox.`);
+  drawLibrary();
+  drawRecent();
+  await library.loading;   // a listing begun before the deletions would bring them back: list again after it
+  loadLibrary();
+}
+async function forgetRecent(path) {
+  for (const r of await store.list()) {
+    if (r.hidden || r.dropbox?.path?.toLowerCase() !== path.toLowerCase()) continue;
+    const { id, ...rest } = r;
+    await store.save(id, { ...rest, hidden: true });
+  }
+}
 $("libCheck").addEventListener("click", async () => {
   $("libCheck").disabled = true;
   try {
@@ -1402,10 +1481,10 @@ panel.addEventListener("click", (e) => {
 // Two rows of parts (data-el in index.html), arranged by the viewer and kept on this device:
 // Settings → Arrange the buttons, then tap a part and move it. Settings itself can't be hidden,
 // so the bar can always be arranged again.
-const BAR_DEFAULT = { rows: [["progress", "highlight", "fullscreen"], ["back", "rewind", "play", "forward", "speed", "timing", "fix", "settings"]],
-  hidden: [] };
-const BAR_LABELS = { progress: "Progress bar", highlight: "Soft highlight", back: "Back", rewind: "−5s", play: "Play", forward: "+5s",
-  speed: "Speed", timing: "Timing", fix: "Fix", settings: "Settings", fullscreen: "Full screen" };
+const BAR_DEFAULT = { rows: [["progress", "highlight", "lock", "fullscreen"],
+  ["back", "rewind", "play", "forward", "speed", "timing", "fix", "settings"]], hidden: [] };
+const BAR_LABELS = { progress: "Progress bar", highlight: "Soft highlight", lock: "Lock", back: "Back", rewind: "−5s", play: "Play",
+  forward: "+5s", speed: "Speed", timing: "Timing", fix: "Fix", settings: "Settings", fullscreen: "Full screen" };
 // Kept here, not looked up: a part taken out of the bar is detached for a moment and couldn't be found.
 const PARTS = new Map([...bar.querySelectorAll("[data-el]")].map((el) => [el.dataset.el, el]));
 const barPart = (id) => PARTS.get(id);
@@ -1506,6 +1585,79 @@ $("arrangeDone").addEventListener("click", () => setArranging(false));
 $("backBtn").addEventListener("click", goHome);
 $("rewindBtn").addEventListener("click", () => skip(-5));
 $("forwardBtn").addEventListener("click", () => skip(5));
+
+// ---------------------------------------------------------------- touch lock
+// The lock button covers the player: no touch or click reaches anything under it (the keyboard
+// still works). A touch shows the slider; the lock has to be slid all the way to the right and
+// let go there. A stray touch, or a slide that wanders off the track, leaves it locked.
+const lockLayer = $("lock"), unlock = $("unlock"), knob = $("unlockKnob");
+let unlockTimer = 0, slide = null, knobAt = 0;
+function setLocked(on) {
+  lockLayer.hidden = !on;
+  player.classList.toggle("locked", on);
+  for (const part of player.children) if (part !== lockLayer) part.inert = on;   // nothing under it takes focus either
+  slide = null;
+  moveKnob(0);
+  if (on) showUnlock();
+  else unlock.classList.remove("show");
+}
+/** Shows the slider for a few seconds (every touch on the lock shows it again). */
+function showUnlock() {
+  unlock.classList.add("show");
+  clearTimeout(unlockTimer);
+  unlockTimer = setTimeout(() => { if (!slide) unlock.classList.remove("show"); }, 3500);
+}
+const knobRoom = () => unlock.clientWidth - knob.offsetWidth - 10;   // the knob sits 5 px inside each end
+function moveKnob(x, glide = false) {
+  const share = x / (knobRoom() || 1);
+  knobAt = x;
+  knob.classList.toggle("back", glide);
+  knob.style.transform = x ? `translateX(${x}px)` : "";
+  unlock.querySelector(".unlock-text").style.opacity = String(Math.max(0, 1 - share * 1.6));
+  knob.setAttribute("aria-valuenow", String(Math.round(share * 100)));
+}
+$("lockBtn").addEventListener("click", () => setLocked(true));
+lockLayer.addEventListener("pointerdown", (e) => {
+  if (knob.contains(e.target)) return;
+  e.preventDefault();
+  showUnlock();
+});
+for (const type of ["click", "dblclick", "contextmenu"]) lockLayer.addEventListener(type, (e) => e.preventDefault());
+lockLayer.addEventListener("touchmove", (e) => e.preventDefault(), { passive: false });   // no scrolling or zooming under it
+lockLayer.addEventListener("gesturestart", (e) => e.preventDefault());                   // Safari's pinch
+knob.addEventListener("pointerdown", (e) => {
+  if (slide) return;
+  e.preventDefault();
+  knob.setPointerCapture(e.pointerId);
+  slide = { id: e.pointerId, x: e.clientX, y: e.clientY, at: 0 };
+  moveKnob(0);
+  showUnlock();
+});
+knob.addEventListener("pointermove", (e) => {
+  if (e.pointerId !== slide?.id) return;
+  if (Math.abs(e.clientY - slide.y) > unlock.offsetHeight * 1.5) { endSlide(false); return; }   // wandered off the track
+  slide.at = clamp(e.clientX - slide.x, 0, knobRoom());
+  moveKnob(slide.at);
+});
+knob.addEventListener("pointerup", (e) => { if (e.pointerId === slide?.id) endSlide(slide.at >= knobRoom() - 4); });
+knob.addEventListener("pointercancel", (e) => { if (e.pointerId === slide?.id) endSlide(false); });
+function endSlide(done) {
+  if (knob.hasPointerCapture(slide.id)) knob.releasePointerCapture(slide.id);
+  slide = null;
+  if (done) { setLocked(false); return; }
+  moveKnob(0, true);   // springs back
+  showUnlock();
+}
+// With the keyboard, the arrow keys move the lock a quarter of the way at a time.
+knob.addEventListener("keydown", (e) => {
+  const step = { ArrowRight: 1, ArrowUp: 1, PageUp: 1, End: 4, ArrowLeft: -1, ArrowDown: -1, PageDown: -1, Home: -4 }[e.key];
+  if (!step || slide) return;
+  e.preventDefault();
+  e.stopPropagation();   // not the player's shortcuts
+  const room = knobRoom(), x = clamp(knobAt + (step * room) / 4, 0, room);
+  if (x >= room) setLocked(false);
+  else { moveKnob(x, true); showUnlock(); }
+});
 
 // ---------------------------------------------------------------- seeking, with a brief hint on the video
 function skip(s) {
@@ -1714,6 +1866,7 @@ $("language").addEventListener("change", () => { S.language = $("language").valu
 function goHome() {
   if ($("settings").open) $("settings").close();
   if (arranging) setArranging(false);
+  if (!lockLayer.hidden) setLocked(false);
   video.pause();
   save();
   player.hidden = true;

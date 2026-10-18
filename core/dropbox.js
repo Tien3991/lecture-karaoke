@@ -8,6 +8,7 @@
 //                  cursor it ends with returns only what changed since (changes())
 //   streaming      files/get_temporary_link: a plain URL for the <video> element, valid 4 hours
 //   byte ranges    files/download with a Range header
+//   deleting       files/delete_v2 (Dropbox keeps the file among its deleted files for a while)
 //   uploads        upload sessions in 8 MB chunks, retried; the session, offset and hashed blocks
 //                  are kept (by the caller, in IndexedDB) after every chunk, so an interrupted
 //                  upload continues where it stopped
@@ -216,6 +217,17 @@ export class Dropbox {
   }
 
   async metadata(path) { return this.rpc("files/get_metadata", { path }); }
+
+  /** Deletes a file (or folder): its metadata, or null if it was already gone. Dropbox keeps it
+   *  among the deleted files on dropbox.com, where it can be restored. */
+  async remove(path) {
+    try {
+      return (await this.rpc("files/delete_v2", { path })).metadata;
+    } catch (err) {
+      if (err.kind === "missing") return null;
+      throw err;
+    }
+  }
 
   /**
    * Uploads source ({size, read(offset, length) -> Uint8Array}) to path in 8 MB chunks through an

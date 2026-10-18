@@ -1,12 +1,12 @@
 // Dropbox and the transcription job, against the stand-ins in dev/serve.mjs (test tokens only):
 // Dropbox's content hash (on its published example file, downloaded once to a temporary folder),
 // the client's token renewal, paged listing and change cursor, byte ranges and temporary links,
-// resumable uploads, the library's matching of Dropbox files to index entries, starting the job,
+// deleting, resumable uploads, the library's matching of Dropbox files to index entries, starting the job,
 // and index.json updates past 1 MB.
 import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash, randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createServer } from "../dev/serve.mjs";
@@ -126,6 +126,23 @@ test("Dropbox client: token renewal, paged listing, change cursor, byte ranges, 
   assert.equal((await fetch(link, { headers: { Range: "bytes=0-9" } })).status, 410, "an expired link stops working");
   await assert.rejects(dbx.temporaryLink("/nowhere.mp4"), { kind: "missing" });
   await post("/mock-dropbox/__config", { pageSize: 2000 });
+});
+
+test("deleting: the file goes (not its neighbours), the change cursor reports it, one already gone is fine", async () => {
+  put("Done/Lecture 1.mp4", randomBytes(300));
+  put("Done/Lecture 2.mp4", randomBytes(400));
+  const dbx = dropbox(), { cursor } = await dbx.list();
+  assert.equal((await dbx.remove("/done/lecture 1.MP4")).path_display, "/Done/Lecture 1.mp4", "any case, as in Dropbox");
+  assert.ok(!existsSync(path.join(box, "Done/Lecture 1.mp4")));
+  assert.ok(existsSync(path.join(box, "Done/Lecture 2.mp4")), "only that file");
+  assert.deepEqual((await dbx.changes(cursor)).entries.map((e) => [e[".tag"], e.path_display]), [["deleted", "/Done/Lecture 1.mp4"]]);
+  assert.equal(await dbx.remove("/Done/Lecture 1.mp4"), null, "already gone");
+  const elsewhere = path.join(base, "elsewhere.mp4");
+  writeFileSync(elsewhere, randomBytes(50));
+  symlinkSync(elsewhere, path.join(box, "Done/Linked.mp4"));
+  await dbx.remove("/Done/Linked.mp4");
+  assert.ok(!existsSync(path.join(box, "Done/Linked.mp4")) && existsSync(elsewhere), "the stand-in deletes a link, never what it points to");
+  rmSync(path.join(box, "Done"), { recursive: true });
 });
 
 test("uploads: 8 MB chunks, resumed after an interruption and through lost replies, content hash checked", async () => {
