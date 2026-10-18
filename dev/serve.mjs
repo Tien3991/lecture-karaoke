@@ -37,7 +37,8 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const types = { ".html": "text/html; charset=utf-8", ".js": "text/javascript", ".mjs": "text/javascript",
   ".css": "text/css", ".json": "application/json", ".webmanifest": "application/manifest+json",
   ".png": "image/png", ".woff2": "font/woff2", ".mp4": "video/mp4", ".m4v": "video/mp4", ".mov": "video/quicktime",
-  ".aac": "audio/aac", ".txt": "text/plain; charset=utf-8" };
+  ".aac": "audio/aac", ".m4a": "audio/mp4", ".m4b": "audio/mp4", ".mp3": "audio/mpeg", ".wav": "audio/wav", ".flac": "audio/flac",
+  ".ogg": "audio/ogg", ".oga": "audio/ogg", ".opus": "audio/ogg", ".txt": "text/plain; charset=utf-8" };
 
 /** Sends a file, honouring a Range header (Safari needs it to play video). */
 function sendFile(req, res, file, extra = {}) {

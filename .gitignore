@@ -1,6 +1,16 @@
 # Never publish media, transcripts or test fixtures: they stay on this computer.
 *.mp4
+*.m4v
 *.mov
+*.m4a
+*.m4b
+*.mp3
+*.aac
+*.wav
+*.flac
+*.ogg
+*.oga
+*.opus
 *.json
 !manifest.webmanifest
 fixtures/

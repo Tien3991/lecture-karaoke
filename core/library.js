@@ -1,5 +1,5 @@
-// The Dropbox library: the videos in the app's Dropbox folder, each with its entry in the
-// transcripts repository's index.json, if any. Entries are matched by Dropbox's content hash
+// The Dropbox library: the videos and audio recordings in the app's Dropbox folder, each with its
+// entry in the transcripts repository's index.json, if any. Entries are matched by Dropbox's content hash
 // (entry.dropbox.hash), then by name and size (entries made before Dropbox, or from a local file).
 // Also the shape of index entries, shared with vertical_video_maker:
 //   {key, name, folder, size, fingerprint, duration_ms, audio_start_ms, width, height,
@@ -8,8 +8,9 @@
 //    error | null, id | null, words | null, updated}
 // Pure functions: they run in the browser and in the Node tests.
 import { norm } from "./transcript.js";
+import { AUDIO_FILE, MEDIA_FILE } from "./media.js";
 
-export const VIDEO_FILE = /\.(mp4|m4v|mov)$/i;
+export const VIDEO_FILE = /\.(mp4|m4v|mov)$/i;   // (2.0.x scripts import it; files are told apart in core/media.js)
 export const STAGING = "/.staging/";   // audio waiting to be transcribed (the job deletes it)
 
 /** The course folder of a Dropbox path: "/CS224N/Lecture 12.mp4" -> "CS224N", "/a.mp4" -> "". */
@@ -25,8 +26,9 @@ export function entryStatus(entry) {
 
 const byName = (a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" });
 
-/** The listed videos (not the staging folder) with their index entries:
- *  [{name, path, folder, size, hash, entry, status}], status as entryStatus. */
+/** The listed videos and recordings (not the staging folder) with their index entries:
+ *  [{name, path, folder, size, hash, entry, status, audio}], status as entryStatus; audio: an audio
+ *  file, or an MP4 its entry knows to have no picture. */
 export function mergeLibrary(files, videos) {
   const byHash = new Map(), bySize = new Map();
   for (const v of videos || []) {
@@ -34,11 +36,11 @@ export function mergeLibrary(files, videos) {
     else if (!bySize.has(`${v.name}\n${v.size}`)) bySize.set(`${v.name}\n${v.size}`, v);
   }
   return files
-    .filter((f) => (f[".tag"] ?? "file") === "file" && VIDEO_FILE.test(f.name) && !f.path_lower.startsWith(STAGING))
+    .filter((f) => (f[".tag"] ?? "file") === "file" && MEDIA_FILE.test(f.name) && !f.path_lower.startsWith(STAGING))
     .map((f) => {
       const entry = byHash.get(f.content_hash) || bySize.get(`${f.name}\n${f.size}`) || null;
       return { name: f.name, path: f.path_display, folder: folderOf(f.path_display), size: f.size, hash: f.content_hash,
-        entry, status: entryStatus(entry) };
+        entry, status: entryStatus(entry), audio: AUDIO_FILE.test(f.name) || entry?.width === 0 };
     })
     .sort((a, b) => byName(a.folder, b.folder) || byName(a.name, b.name));
 }

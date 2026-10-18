@@ -7,8 +7,8 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Karaoke">
-<meta name="app-version" content="2.0.1">
-<meta name="description" content="Plays your lecture videos, from your device or your Dropbox, with live karaoke subtitles from their Soniox transcripts; new videos get transcribed on GitHub.">
+<meta name="app-version" content="2.1.0">
+<meta name="description" content="Plays your lecture videos and audio recordings, from your device or your Dropbox, with live karaoke subtitles from their Soniox transcripts; new ones get transcribed on GitHub.">
 <title>Lecture Karaoke</title>
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icons/icon-192.png">
@@ -19,13 +19,13 @@
 <body>
 <main id="welcome" class="welcome">
   <h1>Lecture Karaoke</h1>
-  <p class="intro">Plays a lecture video with live karaoke subtitles from its transcript. Videos come from this device or your Dropbox; transcripts come from your private GitHub repository, where new videos get transcribed.</p>
+  <p class="intro">Plays a lecture video or audio recording with live karaoke subtitles from its transcript. Lectures come from this device or your Dropbox; transcripts come from your private GitHub repository, where new ones get transcribed.</p>
   <h2 id="localHead" class="local-head" hidden>On this device</h2><!-- unused since 2.0.1; 2.0.0's script looks it up -->
   <div class="pickers">
     <label class="pick">
-      <input type="file" id="pickVideo" accept="video/mp4,.mp4,video/*">
+      <input type="file" id="pickVideo" accept="video/mp4,.mp4,video/*,audio/*,.m4a,.m4b,.mp3,.aac,.wav,.flac,.ogg,.oga,.opus">
       <span class="pick-step">1</span>
-      <span><b>Video</b><br><span id="videoName" class="pick-name">Choose the lecture video</span></span>
+      <span><b>Video or audio</b><br><span id="videoName" class="pick-name">Choose the lecture video or audio</span></span>
     </label>
     <label class="pick">
       <input type="file" id="pickJson" accept=".json,application/json">
@@ -45,9 +45,9 @@
   <section id="library" class="library" hidden>
     <div class="lib-head">
       <h2>Dropbox</h2>
-      <button type="button" id="libCheck" class="linkish" title="Start the transcription job now for videos added to Dropbox (it also runs on a schedule)">Check now</button>
+      <button type="button" id="libCheck" class="linkish" title="Start the transcription job now for files added to Dropbox (it also runs on a schedule)">Check now</button>
     </div>
-    <input type="search" id="libSearch" class="lib-search" placeholder="Search videos" aria-label="Search the videos in Dropbox" autocomplete="off" spellcheck="false">
+    <input type="search" id="libSearch" class="lib-search" placeholder="Search" aria-label="Search the lectures in Dropbox" autocomplete="off" spellcheck="false">
     <p id="libNote" class="small lib-note" role="status"></p>
     <div id="libList" class="lib-list"></div>
   </section>
@@ -55,7 +55,11 @@
 </main>
 
 <div id="player" class="player" hidden>
-  <div class="video-box"><video id="video" playsinline preload="auto"></video><div id="flash" class="flash" aria-hidden="true"></div></div>
+  <div class="video-box"><video id="video" playsinline preload="auto"></video>
+    <!-- A recording shows its cover art here, or bars that move with the sound (app.js setLook). -->
+    <div id="cover" class="cover" hidden><img id="coverBack" class="cover-back" alt="" draggable="false"><img id="coverArt" class="cover-art" alt="" draggable="false"></div>
+    <canvas id="viz" class="viz" hidden></canvas>
+    <div id="flash" class="flash" aria-hidden="true"></div></div>
   <div id="panel" class="panel">
     <div id="prev" class="ctx prev"></div>
     <div id="cur" class="cur"></div>

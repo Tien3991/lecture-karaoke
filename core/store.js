@@ -4,8 +4,10 @@
 //                GitHub, the paired video (name, size, fingerprint), title, last opened
 //   files:       copies of transcripts (from GitHub with their ETag, or picked on this device),
 //                so a lecture reopens offline and without re-downloading; also, by key prefix,
-//                the Dropbox listing and its cursor ("dropbox:"), content hashes of local videos
-//                ("hash:<fingerprint>") and unfinished uploads ("upload:<fingerprint>:<kind>")
+//                the Dropbox listing and its cursor ("dropbox:"), what was read of Dropbox files
+//                ("dropbox:info:<hash>": details, fingerprint, cover art), content hashes of local
+//                videos ("hash:<fingerprint>") and of picked recordings ("hashOf:<name>:<size>:<date>"),
+//                and unfinished uploads ("upload:<fingerprint>:<kind>")
 const DB_NAME = "lecture-karaoke", RECORDS = "transcripts", FILES = "files";
 let dbPromise = null;
 

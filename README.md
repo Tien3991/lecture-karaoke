@@ -1,22 +1,28 @@
 # Lecture Karaoke
 
-A web app that plays a lecture video with live karaoke subtitles from its Soniox transcript: the
-words turn yellow as they are spoken, with the text just said and the text coming next in gray.
-Nothing is rendered. Videos come from your device or stream from your Dropbox; transcripts come
-from your own private GitHub repository, which also shares word fixes between your devices, and
-a GitHub Actions job there transcribes new videos.
+A web app that plays a lecture video or audio recording with live karaoke subtitles from its
+Soniox transcript: the words turn yellow as they are spoken, with the text just said and the text
+coming next in gray. Nothing is rendered. Lectures come from your device or stream from your
+Dropbox; transcripts come from your own private GitHub repository, which also shares word fixes
+between your devices, and a GitHub Actions job there transcribes new lectures.
 
 **Open it:** https://tien3991.github.io/lecture-karaoke/ (install it from the browser's menu, or on
 iPhone/iPad with Share → Add to Home Screen, to watch full screen and offline).
 
 ## Use
 
-1. Pick the lecture video on this device (the original 16:9 file; the pickers are at the top of the
-   start screen), or tap a video in the Dropbox library further down. If its transcript is in your
-   GitHub repository or was opened on this device before,
-   it plays right away. Otherwise the app offers to get one (below), or pick its `.json`. On
+1. Pick the lecture on this device: the original 16:9 MP4 video, or an audio recording (MP3, M4A,
+   AAC, WAV, FLAC, Ogg, Opus). The pickers are at the top of the start screen; or tap a lecture in
+   the Dropbox library further down. If its transcript is in your GitHub repository or was opened
+   on this device before, it plays right away. Otherwise the app offers to get one (below), or pick its `.json`. On
    iPhone/iPad pick files with *Choose File* (the Files app).
 2. Play. Tap any word, current or gray, to jump to it.
+
+A recording shows its cover art where the video would be (from the file's ID3 tag, FLAC picture or
+MP4 `covr`; Ogg and Opus pictures aren't read), or, without one, bars that move with the sound. On
+iPhone and iPad the bars follow the transcript's words instead (the app doesn't route their audio
+through Web Audio, where the silent switch or the background could mute it). The lock screen and
+media controls show the lecture's name, its Dropbox folder and a recording's cover art.
 
 The three most recent lectures are listed under the pickers with where you stopped. One streamed from Dropbox
 streams again; for a file on the device a browser can't reopen it by itself, so tapping one opens
@@ -49,15 +55,15 @@ correction format.
 Once GitHub is connected and the repository has `config/dropbox.json` (`{"app_key",
 "refresh_token"}` of the *Lecture Karaoke* Dropbox app, which sees only its own folder,
 Apps/Lecture Karaoke; approved once on the Mac with `vvm.py dropbox-auth`), the start screen lists,
-under the recent lectures, the videos in that folder, a section
+under the recent lectures, the videos and recordings in that folder, a section
 per course subfolder, with search and a badge each: *Ready*, *Transcribing*, *Not transcribed* or
-*Failed*. A tap streams the video (a temporary link, renewed before its 4 hours are up, or at once
-if the video stops on an expired link, keeping the position). Videos put in Dropbox from any device
-are transcribed by the job, `.github/workflows/transcribe.yml` in the repository: on its schedule,
+*Failed*. A tap streams the file (a temporary link, renewed before its 4 hours are up, or at once
+if it stops on an expired link, keeping the position). Files put in Dropbox from any device are
+transcribed by the job, `.github/workflows/transcribe.yml` in the repository: on its schedule,
 or right away with *Check now*.
 
-A video picked on the device is looked up in Dropbox (same size, confirmed by Dropbox's content
-hash, computed once per video and kept), and then:
+A file picked on the device is looked up in Dropbox (same size, confirmed by Dropbox's content
+hash, computed once per file and kept), and then:
 
 - **It has a transcript:** it plays; if it isn't in Dropbox, the app offers *Upload to Dropbox*
   (also in ⋯ Settings) so other devices can stream it.
@@ -65,7 +71,8 @@ hash, computed once per video and kept), and then:
 - **Neither:** *Upload to Dropbox* sends the video to a course folder (asked, *Uploads* at first),
   where the job transcribes it; *Transcribe only* copies just its audio track out of the MP4 (AAC
   frames in an ADTS stream, about 1 MB a minute, not re-encoded) to `/.staging/<fingerprint>.aac`,
-  which the job transcribes and deletes; the video stays on the device.
+  which the job transcribes and deletes; the video stays on the device. A recording is offered
+  *Upload to Dropbox* only: it is its own audio.
 
 The video plays meanwhile; the app checks the index every 20 s and the subtitles appear when the
 transcript is there. Uploads go in 8 MB pieces through a Dropbox upload session; one interrupted
@@ -80,9 +87,9 @@ and starts the job with `POST …/actions/workflows/transcribe.yml/dispatches` (
 
 | Field | |
 |---|---|
-| `key`, `name`, `size`, `fingerprint` | the video; `key` is the file name without extension, plus ` (` + `fingerprint[4:12]` + `)` when taken |
+| `key`, `name`, `size`, `fingerprint` | the file; `key` is the file name without extension, plus ` (` + `fingerprint[4:12]` + `)` when taken |
 | `folder` | its course folder in Dropbox (`""` at the top level, and for audio-only entries) |
-| `duration_ms`, `audio_start_ms`, `width`, `height` | from its MP4 index, so the app can stream it without reading the file |
+| `duration_ms`, `audio_start_ms`, `width`, `height` | from its MP4 index, so the app can stream it without reading the file; a recording has `width` and `height` 0, and one that isn't an MP4 `audio_start_ms` 0 and `duration_ms` `null` until the job (or a device playing it) has read it |
 | `dropbox` | `{path, hash}`: where it is in Dropbox (relative to the app folder) and its content hash, or `null` |
 | `staged`, `skip_ms` | `"/.staging/<fingerprint>.aac"` for audio-only transcription, and the ms at the start of that audio that the video doesn't play (the audio edit's media time: decoder priming) |
 | `transcript` | `"transcripts/<key>.json"` once there |
@@ -95,10 +102,12 @@ Connect once per device (start screen → *Connect GitHub*, or ⋯ Settings): th
 (`owner/name`) and a fine-grained token for that repository only, with *Contents: read and write*
 (and *Actions: read and write* to start transcriptions). The token stays in that browser.
 
-- `index.json` lists each video (fields above). It is read raw and written with the sha from the
-  ETag, so it keeps working past the contents API's 1 MB limit. A video is
-  recognised by its fingerprint (SHA-256 of its size and its MP4 index, the `moov` box: about 1-3 MB
-  to read, the same whatever the file is called), else by name after asking.
+- `index.json` lists each lecture (fields above). It is read raw and written with the sha from the
+  ETag, so it keeps working past the contents API's 1 MB limit. A file is recognised by its
+  fingerprint, the same whatever the file is called, else by name after asking: for an MP4 (videos,
+  and M4A/M4B recordings) `fp1-` + SHA-256 of its size and its MP4 index, the `moov` box (about
+  1-3 MB to read); for other audio files, which have no such index, `fa1-` + Dropbox's content hash
+  of the whole file (read once, and kept per file name, size and date).
 - `transcripts/<key>.json` holds the transcript; vertical_video_maker publishes there (`vvm.py
   publish`, and automatically after transcribing), and so does the app for a transcript picked by
   hand.
@@ -142,11 +151,12 @@ Plain HTML, CSS and ES modules; no build step.
   pipeline (`dev/make_fixtures.py`; they contain transcripts, so they live outside this repository),
   and the Dropbox side against the mocks: content hashes (Dropbox's published example, downloaded
   to a temporary folder), listing, links, resumed uploads, library matching, dispatch and an
-  `index.json` past 1 MB. The audio copy is checked by decoding with ffmpeg (`FFMPEG`, `FFPROBE`;
+  `index.json` past 1 MB; and `core/media.js`, telling files apart and finding cover art (ID3
+  2.2-2.4, FLAC, WAV, MP4 `covr`), also in files made by ffmpeg. The audio copy is checked by decoding with ffmpeg (`FFMPEG`, `FFPROBE`;
   a lecture video in the parent folder, or `LECTURE12`); those tests are skipped without them.
 - Releasing: change the version in `app.js`, `sw.js` and the `app-version` meta of `index.html`
   (`npm test` checks they match), then push. Installed apps show a "new version" banner; the page
   and its scripts always come from the same release's cache. Keep element ids that older releases'
   scripts look up, since they can briefly run against a newer page while updating.
 
-Videos, transcripts and fixtures are never committed here (see `.gitignore`).
+Videos, recordings, transcripts and fixtures are never committed here (see `.gitignore`).

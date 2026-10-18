@@ -1,20 +1,23 @@
-// Lecture Karaoke: plays a lecture video, from this device or from Dropbox, with live karaoke
-// subtitles from its Soniox transcript. The subtitle rules are the vertical_video_maker pipeline's
-// (ported in core/). Videos without a transcript get one from the transcription job in GitHub
-// Actions, which reads them (or just their audio) from Dropbox.
+// Lecture Karaoke: plays a lecture video or audio recording, from this device or from Dropbox, with
+// live karaoke subtitles from its Soniox transcript. The subtitle rules are the vertical_video_maker
+// pipeline's (ported in core/). A recording shows its cover art, or bars that move with the sound.
+// Lectures without a transcript get one from the transcription job in GitHub Actions, which reads
+// them (or just a video's audio) from Dropbox.
 import { CONJ_BY_LANGUAGE, wordsFromTranscript } from "./core/transcript.js";
 import { activeEvent, buildEvents, buildPieces, spokenCount } from "./core/timeline.js";
 import { blobReader, readMp4Info, videoFingerprint } from "./core/mp4.js";
+import { AUDIO_FILE, MEDIA_FILE, audioArtwork, hashFingerprint, mediaKind, mp4Artwork, pagedReader } from "./core/media.js";
+import { Visualizer } from "./core/visualizer.js";
 import { applyFixes, exportTranscript, transcriptText } from "./core/corrections.js";
 import { GitHub } from "./core/github.js";
 import { Dropbox, LINK_MS, contentHash } from "./core/dropbox.js";
 import { extractAdts } from "./core/audio.js";
-import { STAGING, VIDEO_FILE, changedEntry, entryStatus, folderOf, groupByFolder, indexEntry, isoNow, keyFor, mergeLibrary, searchLibrary,
+import { STAGING, changedEntry, entryStatus, folderOf, groupByFolder, indexEntry, isoNow, keyFor, mergeLibrary, searchLibrary,
   withEntry } from "./core/library.js";
 import { applyDeltas, deltaFor, sameFixes } from "./core/sync.js";
 import * as store from "./core/store.js";
 
-const VERSION = "2.0.1";
+const VERSION = "2.1.0";
 // Proportions of the burned vertical video (identical in every pipeline calibration), in em of
 // the main subtitle text: line limit, frame width, and the height the three blocks need.
 const FIT_EM = 892.4 / 67.797, FRAME_EM = 1080 / 67.797, PANEL_EM = 14.4, CTX_SCALE = 74 / 93;
@@ -217,9 +220,11 @@ const mb = (bytes) => `${bytes >= 1e9 ? (bytes / 1e9).toFixed(1) : Math.max(1, M
 function drawLibrary() {
   const q = $("libSearch").value.trim(), items = searchLibrary(library.items, q), groups = groupByFolder(items);
   const n = library.items.length, busy = library.items.filter((i) => i.status === "pending").length;
+  const audio = library.items.filter((i) => i.audio).length, videos = n - audio;
+  const count = [videos && `${videos} video${videos === 1 ? "" : "s"}`, audio && `${audio} audio file${audio === 1 ? "" : "s"}`].filter(Boolean).join(" and ");
   $("libNote").textContent = library.note || (library.loading && !n ? "Loading…"
-    : !n ? "No videos yet. Put them in Dropbox, in Apps/Lecture Karaoke (a folder per course)."
-    : q && !items.length ? "Nothing matches." : `${n} video${n === 1 ? "" : "s"}${busy ? `, ${busy} being transcribed` : ""}.`);
+    : !n ? "Nothing yet. Put lecture videos or audio in Dropbox, in Apps/Lecture Karaoke (a folder per course)."
+    : q && !items.length ? "Nothing matches." : `${count}${busy ? `, ${busy} being transcribed` : ""}.`);
   $("libList").replaceChildren(...groups.map((g) => {
     const d = Object.assign(document.createElement("details"), { className: "lib-folder", open: !!q || groups.length === 1 || openFolders.has(g.folder) });
     d.addEventListener("toggle", () => { if (!$("libSearch").value.trim()) (d.open ? openFolders.add(g.folder) : openFolders.delete(g.folder)); });
@@ -228,7 +233,8 @@ function drawLibrary() {
     const ul = Object.assign(document.createElement("ul"), { className: "lib-items" });
     ul.append(...g.items.map((it) => {
       const [label, cls] = BADGES[it.status], b = Object.assign(document.createElement("button"), { type: "button", className: "lib-item" });
-      const meta = [it.entry?.duration_ms ? clock(it.entry.duration_ms / 1000) : "", mb(it.size), it.status === "failed" ? it.entry.error : ""];
+      const meta = [it.audio ? "Audio" : "", it.entry?.duration_ms ? clock(it.entry.duration_ms / 1000) : "", mb(it.size),
+        it.status === "failed" ? it.entry.error : ""];
       b.append(Object.assign(document.createElement("span"), { className: "lib-title", textContent: it.name.replace(/\.[^.]+$/, "") }),
         Object.assign(document.createElement("span"), { className: `badge ${cls}`, textContent: label }),
         Object.assign(document.createElement("span"), { className: "lib-meta", textContent: meta.filter(Boolean).join(" · ") }));
@@ -247,7 +253,7 @@ $("libCheck").addEventListener("click", async () => {
   try {
     await gh.dispatch("");
     library.watchUntil = Date.now() + 20 * 60000;
-    toast("The transcription job is looking for new videos; it takes a few minutes.");
+    toast("The transcription job is looking for new files; it takes a few minutes.");
   } catch (err) {
     toast(err.message);
   } finally {
@@ -259,21 +265,34 @@ setInterval(() => {
   if (dbx && player.hidden && (Date.now() < library.watchUntil || library.items.some((i) => i.status === "pending"))) loadLibrary();
 }, 60000);
 
-/** What the player needs from a Dropbox video: from its index entry (when it names this very file),
- *  else from the file's MP4 index (moov), read with byte ranges and kept on the device. */
-async function dropboxVideoInfo(it) {
-  const e = it.entry;
-  if (e?.fingerprint && e.dropbox?.hash === it.hash && [e.duration_ms, e.audio_start_ms, e.width, e.height].every(Number.isFinite)) {
+/** What the player needs from a Dropbox file. A video that its index entry names (this very file)
+ *  needs nothing read. Otherwise the MP4 index (moov) is read with byte ranges, and a recording's
+ *  cover art (from the moov, or from the tags at the start of other audio files); kept on the
+ *  device. Other audio files are known by their content hash, their length by their entry or once
+ *  they play. {info, fingerprint, audio, art} */
+async function dropboxMediaInfo(it) {
+  const e = it.entry, mp4 = mediaKind(it.name) === "mp4";
+  if (mp4 && !AUDIO_FILE.test(it.name) && e?.fingerprint && e.dropbox?.hash === it.hash && e.width > 0
+    && [e.duration_ms, e.audio_start_ms, e.width, e.height].every(Number.isFinite)) {
     return { info: { durationSec: e.duration_ms / 1000, audioStartSec: e.audio_start_ms / 1000, width: e.width, height: e.height },
-      fingerprint: e.fingerprint };
+      fingerprint: e.fingerprint, audio: false, art: null };
   }
-  const key = `dropbox:info:${it.hash}`, kept = await store.getFile(key);
-  if (kept) return kept;
-  const mp4 = await readMp4Info((offset, length) => dbx.download(it.path, offset, Math.min(offset + length, it.size) - 1), it.size);
-  const got = { info: { durationSec: mp4.durationSec, audioStartSec: mp4.audioStartSec, width: mp4.width, height: mp4.height },
-    fingerprint: await videoFingerprint(mp4, it.size) };
-  await store.putFile(key, got);
-  return got;
+  const key = `dropbox:info:${it.hash}`;
+  let got = await store.getFile(key);
+  if (!got) {
+    const read = pagedReader((offset, length) => dbx.download(it.path, offset, Math.min(offset + length, it.size) - 1), it.size);
+    if (mp4) {
+      const m = await readMp4Info(read, it.size), audio = !m.tracks.some((t) => t.handler === "vide");
+      got = { info: { durationSec: m.durationSec, audioStartSec: m.audioStartSec, width: m.width, height: m.height },
+        fingerprint: await videoFingerprint(m, it.size), audio, art: audio ? mp4Artwork(m.moov) : null };
+      await store.putFile(key, got);
+    } else {
+      const art = await audioArtwork(read, it.size).catch(() => undefined);   // not read now: bars, and next time it tries again
+      got = { info: { durationSec: 0, audioStartSec: 0, width: 0, height: 0 }, fingerprint: hashFingerprint(it.hash), audio: true, art: art ?? null };
+      if (art !== undefined) await store.putFile(key, got);
+    }
+  }
+  return got.info.durationSec || !(e?.duration_ms > 0) ? got : { ...got, info: { ...got.info, durationSec: e.duration_ms / 1000 } };
 }
 
 /** Streams a library video: with its transcript when it has one, else playing while it waits. */
@@ -283,9 +302,10 @@ async function openFromDropbox(it) {
   setProblems([]);
   $("libNote").textContent = `Opening ${it.name}…`;
   try {
-    const { info, fingerprint } = await dropboxVideoInfo(it);
+    const { info, fingerprint, audio, art } = await dropboxMediaInfo(it);
     const { link } = await dbx.temporaryLink(it.path);
-    const picked = { url: link, name: it.name, size: it.size, info, fingerprint, dropbox: { path: it.path, hash: it.hash } };
+    const picked = { url: link, name: it.name, size: it.size, info, fingerprint, audio: !!audio, art: art ?? null,
+      dropbox: { path: it.path, hash: it.hash } };
     // an entry found by name and size must be this very video
     const entry = it.entry && (!it.entry.fingerprint || it.entry.fingerprint === fingerprint) ? it.entry : null;
     if (entryStatus(entry) === "ready") {
@@ -366,15 +386,61 @@ addEventListener("drop", (e) => {
   if (!player.hidden) return;
   const files = [...e.dataTransfer.files];
   const json = files.find((f) => /\.json$/i.test(f.name) || f.type === "application/json");
-  const vid = files.find((f) => f.type.startsWith("video/") || /\.(mp4|m4v|mov)$/i.test(f.name));
+  const vid = files.find((f) => f !== json && mediaKind(f.name, f.type));
   if (vid) pickedVideo(vid, { lookup: !json });
   if (json) pickedJson(json);
 });
 
-/** What the app needs from a video: its MP4 details and its fingerprint (reads 1-3 MB of it). */
-async function probeVideo(file) {
-  const info = await readMp4Info(blobReader(file), file.size);
-  return { file, info, fingerprint: await videoFingerprint(info, file.size) };
+const noun = (picked) => (picked?.audio ? "recording" : "video");
+
+/** What the app needs from a picked file: its details (an MP4's index, 1-3 MB of it), its
+ *  fingerprint and, for a recording, its cover art. Other audio files are read whole once, for
+ *  their Dropbox content hash (kept by name, size and date), calling onProgress(done, total). */
+async function probeMedia(file, onProgress) {
+  const kind = mediaKind(file.name, file.type, new Uint8Array(await file.slice(0, 12).arrayBuffer()));
+  if (!kind) throw new Error("the app plays MP4 videos and audio files (MP3, M4A, AAC, WAV, FLAC, Ogg, Opus).");
+  if (kind === "mp4") {
+    const info = await readMp4Info(blobReader(file), file.size), audio = !info.tracks.some((t) => t.handler === "vide");
+    return { file, info, fingerprint: await videoFingerprint(info, file.size), audio, art: audio ? mp4Artwork(info.moov) : null };
+  }
+  const key = `hashOf:${file.name}:${file.size}:${file.lastModified}`, kept = await store.getFile(key);
+  const hash = kept?.hash ?? (await contentHash(blobReader(file), file.size, { onProgress }));
+  if (!kept) await store.putFile(key, { hash });
+  const picked = { file, info: { durationSec: 0, audioStartSec: 0, width: 0, height: 0 }, fingerprint: hashFingerprint(hash), audio: true,
+    art: await audioArtwork(blobReader(file), file.size).catch(() => null) };
+  mediaDuration(file).then((sec) => learnDuration(picked, sec));   // the player may know it first
+  return picked;
+}
+/** A recording's length in seconds as the browser reads it (0 when it can't tell). */
+function mediaDuration(file) {
+  return new Promise((resolve) => {
+    const a = document.createElement("audio"), url = URL.createObjectURL(file);
+    let timer = 0;
+    const done = () => {
+      if (!timer) return;
+      clearTimeout(timer);
+      timer = 0;
+      const sec = a.duration;
+      a.removeAttribute("src");
+      a.load();
+      URL.revokeObjectURL(url);
+      resolve(Number.isFinite(sec) ? sec : 0);
+    };
+    timer = setTimeout(done, 15000);
+    a.preload = "metadata";
+    a.addEventListener("loadedmetadata", done, { once: true });
+    a.addEventListener("error", done, { once: true });
+    a.src = url;
+  });
+}
+/** A recording's length, once the browser has read it (its index entry may not have had it). */
+function learnDuration(picked, sec) {
+  if (!picked) return;
+  if (!picked.info.durationSec && Number.isFinite(sec) && sec > 0) picked.info.durationSec = sec;
+  if (S.picked?.info !== picked.info || S.durationMs || !picked.info.durationSec) return;
+  S.durationMs = Math.round(picked.info.durationSec * 1000);
+  if (S.rec.video) { S.rec.durationSec = picked.info.durationSec; save(); }
+  if (S.pieces.length) rebuildEvents();
 }
 
 async function pickedVideo(file, { lookup = true } = {}) {
@@ -388,12 +454,16 @@ async function pickedVideo(file, { lookup = true } = {}) {
   setProblems([]);
   updateStart();
   try {
-    S.picked = await probeVideo(file);
+    const probing = (S.picked = { file, pending: true });
+    const picked = await probeMedia(file, (done, total) => { if (lookup && S.picked === probing) setStep("json", `Reading it… ${pct(done, total)}`, false); });
+    if (S.picked !== probing) return;   // another file was picked meanwhile
+    S.picked = picked;
     if (!lookup) return;
+    setStep("json", "Looking for its transcript…", false);
     if (wanted?.video?.fingerprint && wanted.video.fingerprint !== S.picked.fingerprint) {
-      toast(`That isn't “${wanted.title}”; looking for this video's transcript.`);
+      toast(`That isn't “${wanted.title}”; looking for this ${noun(picked)}'s transcript.`);
     }
-    const found = await findTranscript(S.picked), picked = S.picked;
+    const found = await findTranscript(picked);
     if (found?.ref) {
       setStep("json", found.label, true);
       const text = await transcriptFile(found.ref);
@@ -413,8 +483,9 @@ async function pickedVideo(file, { lookup = true } = {}) {
       : "No transcript yet: see below, or choose its .json file", false);
     trackVideo(picked, found?.entry, { welcome: true });
   } catch (err) {
+    if (S.videoFile !== file) return;   // about a file picked before
     setStep("json", "Choose its .json file", false);
-    setProblems([err.kind ? err.message : `Could not open this video: ${err.message}`]);
+    setProblems([err.kind ? err.message : `Could not open this file: ${err.message}`]);
   }
 }
 function pickedJson(file) {
@@ -427,7 +498,7 @@ function pickedJson(file) {
 /** Where this video's transcript is: on GitHub (by fingerprint; by file name only after asking),
  *  or a lecture opened on this device before (this also works offline). {ref, key, label, entry};
  *  just {entry} while the repository's entry waits for its transcript (pending or failed). */
-async function findTranscript({ file, fingerprint }) {
+async function findTranscript({ file, fingerprint, audio }) {
   const mine = (await store.list()).find((r) => r.video?.fingerprint === fingerprint && r.transcriptRef);
   let entry = null;
   if (gh) {
@@ -435,7 +506,7 @@ async function findTranscript({ file, fingerprint }) {
       const videos = (await repoIndex()).videos || [];
       entry = videos.find((v) => v.fingerprint === fingerprint) || null;
       const byName = !entry && !mine && videos.find((v) => v.name === file.name && v.transcript);
-      if (byName && confirm(`GitHub has a transcript for a video named “${file.name}”, but made from a different file. Use it anyway?`)) entry = byName;
+      if (byName && confirm(`GitHub has a transcript for a ${audio ? "recording" : "video"} named “${file.name}”, but made from a different file. Use it anyway?`)) entry = byName;
     } catch (err) {
       if (!mine) throw err;
     }
@@ -453,7 +524,7 @@ $("startBtn").addEventListener("click", async () => {
   $("startBtn").disabled = true;
   try {
     const text = await S.jsonFile.text();
-    const picked = S.picked?.file === S.videoFile ? S.picked : (S.picked = await probeVideo(S.videoFile));
+    const picked = S.picked?.file === S.videoFile && !S.picked.pending ? S.picked : (S.picked = await probeMedia(S.videoFile));
     await openPair(JSON.parse(text), picked, { ref: null, key: null, text });
     if (S.picked === picked && !player.hidden && W?.picked !== picked && (await dbxReady)) trackVideo(picked, null);
   } catch (err) {
@@ -464,8 +535,8 @@ $("startBtn").addEventListener("click", async () => {
 
 /** Checks that the video and transcript belong together. Returns problems to show. sure: the
  *  repository matched them by content, so a different file name doesn't matter. */
-function pairingProblems(data, info, name, size, fingerprint, rec, sure) {
-  const out = [];
+function pairingProblems(data, picked, name, size, rec, sure) {
+  const { info, fingerprint } = picked, out = [];
   if (!Array.isArray(data.tokens) || !data.tokens.length || !("start_ms" in data.tokens[0])) {
     return ["The transcript isn't a Soniox transcript JSON (no tokens with times)."];
   }
@@ -475,7 +546,7 @@ function pairingProblems(data, info, name, size, fingerprint, rec, sure) {
   if (!sure && data.video && data.video !== name) out.push(`This transcript was made for “${data.video}”, not “${name}”.`);
   const lastMs = data.tokens[data.tokens.length - 1].end_ms;
   if (info.durationSec && lastMs > info.durationSec * 1000 + 3000) {
-    out.push("The transcript is longer than the video: they probably don't belong together.");
+    out.push(`The transcript is longer than the ${noun(picked)}: they probably don't belong together.`);
   }
   const other = rec.video && (rec.video.fingerprint && fingerprint ? rec.video.fingerprint !== fingerprint
     : rec.video.name !== name || rec.video.size !== size);
@@ -487,9 +558,9 @@ function pairingProblems(data, info, name, size, fingerprint, rec, sure) {
  *  size (a Dropbox stream, or development); src: where the transcript came from (ref, repository
  *  key, or the picked text; sure: matched by content, see pairingProblems). */
 async function openPair(data, picked, src) {
-  const { info, fingerprint } = picked, name = picked.file?.name ?? picked.name, size = picked.file?.size ?? picked.size;
+  const name = picked.file?.name ?? picked.name, size = picked.file?.size ?? picked.size;
   const rec = await store.load(data.id || name);
-  const issues = pairingProblems(data, info, name, size, fingerprint, rec, src.sure);
+  const issues = pairingProblems(data, picked, name, size, rec, src.sure);
   if (issues.length && (issues[0].startsWith("This is a vertical") || issues[0].startsWith("The transcript isn't"))) {
     setProblems(issues);
     $("startBtn").disabled = false;
@@ -510,6 +581,7 @@ function showVideo(picked, resumeAt = 0) {
   if (S.videoUrl?.startsWith("blob:")) URL.revokeObjectURL(S.videoUrl);
   S.videoUrl = picked.file ? URL.createObjectURL(picked.file) : picked.url;
   Object.assign(S, { picked, videoName: name, swapping: false, playing: false });
+  corsFor(picked);
   video.src = S.videoUrl;
   applyRate(prefs.rate);
   $("welcome").hidden = true;
@@ -518,6 +590,7 @@ function showVideo(picked, resumeAt = 0) {
   updateChips();
   layout();
   resize();
+  setLook();
   video.addEventListener("loadedmetadata", () => {
     if (resumeAt > 5 && resumeAt < video.duration - 10) {
       video.currentTime = resumeAt;
@@ -624,7 +697,7 @@ async function trackVideo(picked, entry, { welcome = false } = {}) {
   if (W !== w) return;
   renderGet();
   if (!welcome && S.transcript && S.picked === picked && w.online === false && picked.file) {
-    toast("This video isn't in Dropbox: upload it to stream it on your other devices.", "Upload", () => askUpload(w));
+    toast(`This ${noun(picked)} isn't in Dropbox: upload it to stream it on your other devices.`, "Upload", () => askUpload(w));
   }
 }
 async function loadResume(w) {
@@ -639,7 +712,7 @@ async function checkDropbox(w) {
   renderGet();
   try {
     const { files, offline } = await dropboxFiles();
-    const same = files.filter((f) => f.size === size && VIDEO_FILE.test(f.name) && !f.path_lower.startsWith(STAGING))
+    const same = files.filter((f) => f.size === size && MEDIA_FILE.test(f.name) && !f.path_lower.startsWith(STAGING))
       .sort((a, b) => (b.name === name) - (a.name === name));
     let found = (w.entry?.dropbox?.hash && same.find((f) => f.content_hash === w.entry.dropbox.hash)) || null;
     if (!found && same.length && picked.file) {
@@ -653,8 +726,10 @@ async function checkDropbox(w) {
   }
   w.checking = "";
 }
-/** The video file's Dropbox content hash: it reads the whole file, once (kept by fingerprint). */
+/** The file's Dropbox content hash: it reads the whole file, once (kept by fingerprint). A
+ *  recording's fingerprint other than an MP4's is that hash. */
 async function localHash(w) {
+  if (w.picked.fingerprint.startsWith("fa1-")) return w.picked.fingerprint.slice(4);
   const file = w.picked.file, key = `hash:${w.picked.fingerprint}`, kept = await store.getFile(key);
   if (kept?.hash && kept.size === file.size) return kept.hash;
   const hash = await contentHash(blobReader(file), file.size, { onProgress: (done, total) => {
@@ -875,7 +950,7 @@ function getNodes(w, where) {
     if (where === "welcome") { said("Its transcript is ready."); actions(button("Play", () => openReady(w), "primary")); }
     else if (w.online) { if (where === "settings") said(`In Dropbox: ${w.online.path}`, "small"); }
     else if (w.online === false && file && !t) {
-      said("This video isn't in Dropbox: upload it to stream it on your other devices.", "small");
+      said(`This ${noun(w.picked)} isn't in Dropbox: upload it to stream it on your other devices.`, "small");
       actions(button(resumed("video", "Resume upload") ?? "Upload to Dropbox", () => askUpload(w)));
     }
   } else if (status === "pending" && !t) {
@@ -889,13 +964,16 @@ function getNodes(w, where) {
     if (w.online) {
       said(w.picked.dropbox ? "It has no transcript yet." : `It's in Dropbox (${w.online.path}) but has no transcript yet.`);
       actions(button(status === "failed" ? "Try again" : "Transcribe", () => startAction(w, transcribeInDropbox), "primary"));
+    } else if (w.online === false && file && w.picked.audio) {   // its audio is the whole file: no Transcribe only
+      said("It has no transcript yet. Upload it to Dropbox: it is transcribed there, and your other devices can stream it.");
+      actions(button(resumed("video", "Resume upload") ?? "Upload to Dropbox", () => askUpload(w), "primary"));
     } else if (w.online === false && file) {
       said("It has no transcript yet. Upload to Dropbox: it is transcribed there, and your other devices can stream it. " +
         "Transcribe only: just its audio is sent, about 1 MB a minute; the video stays on this device.");
       actions(button(resumed("video", "Resume upload") ?? "Upload to Dropbox", () => askUpload(w), "primary"),
         button(resumed("audio", "Transcribe only") ?? "Transcribe only", () => startAction(w, transcribeOnly)));
     } else if (w.online === null) {
-      said("Dropbox can't be reached right now, so this video can't be transcribed yet.");
+      said(`Dropbox can't be reached right now, so this ${noun(w.picked)} can't be transcribed yet.`);
       actions(button("Try again", async () => { w.error = ""; await checkDropbox(w); renderGet(); }));
     }
   }
@@ -910,7 +988,8 @@ function renderGet() {
   $("getBox").hidden = !welcome;
   $("getBox").replaceChildren(...(welcome ? getNodes(w, "welcome") : []));
   $("waitBox").hidden = !waiting;
-  $("waitBox").replaceChildren(...(!waiting ? [] : mine ? getNodes(w, "player") : [el("p", { textContent: "No transcript for this video yet." })]));
+  $("waitBox").replaceChildren(...(!waiting ? [] : mine ? getNodes(w, "player")
+    : [el("p", { textContent: `No transcript for this ${noun(S.picked)} yet.` })]));
   $("dbxSet").hidden = !set;
   $("dbxBox").replaceChildren(...(set ? getNodes(w, "settings") : []));
   drawLive();
@@ -1105,6 +1184,75 @@ function clock(s) {
   const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = String(s % 60).padStart(2, "0");
   return h ? `${h}:${String(m).padStart(2, "0")}:${sec}` : `${m}:${sec}`;
 }
+
+// ---------------------------------------------------------------- recordings: cover art, or bars
+// A recording (audio only) shows its cover art where the video would be, else bars that move with
+// the sound (core/visualizer.js); the lock screen gets its title and art. Away from iPhone and
+// iPad the bars measure the sound: the element's audio goes through Web Audio, which starts with a
+// tap or a key (browsers allow sound only after one) and stays for the page's life, so from then on
+// streams load with CORS (Dropbox's links allow it), else they would play silent.
+const canMeasure = !isIOS && typeof AudioContext === "function";
+let audioCtx = null, audioGraph = null;   // audioGraph: {analyser} once the element's audio goes through Web Audio
+const viz = new Visualizer($("viz"), video, {
+  analyser: () => audioGraph?.analyser ?? null,
+  speech: () => (S.words.length ? { words: S.words, shiftMs: S.audioOffsetMs + S.syncMs } : null),
+  color: getComputedStyle(document.documentElement).getPropertyValue("--hi").trim() || "#ffe000",
+});
+let look = { art: null, url: "", failed: false };
+
+/** A stream that may go through Web Audio loads with CORS: recordings (where the bars can measure
+ *  the sound), and every stream once the element's audio goes through it. Files on the device are
+ *  the page's own. */
+function corsFor(picked) {
+  if (canMeasure && picked.url && (picked.audio || audioGraph)) video.crossOrigin = "anonymous";
+  else if (!audioGraph) video.removeAttribute("crossorigin");
+}
+
+/** The video area: the video, or a recording's cover art (over a blurred copy), or the bars. */
+function setLook() {
+  const p = player.hidden ? null : S.picked;
+  const audio = !!p && (!!p.audio || (video.readyState > 0 && !video.videoWidth));   // also an MP4 found to have no picture
+  const art = (audio && p.art) || null;
+  if (look.art !== art) {
+    if (look.url) URL.revokeObjectURL(look.url);
+    look = { art, url: art ? URL.createObjectURL(new Blob([art.data], { type: art.type })) : "", failed: false };
+    for (const img of [$("coverArt"), $("coverBack")]) look.url ? (img.src = look.url) : img.removeAttribute("src");
+  }
+  const cover = !!look.url && !look.failed, bars = audio && !cover;
+  player.classList.toggle("recording", audio);
+  $("cover").hidden = !cover;
+  $("viz").hidden = !bars;
+  viz.show(bars);
+  if ("mediaSession" in navigator && typeof MediaMetadata === "function") {
+    try {
+      navigator.mediaSession.metadata = p ? new MediaMetadata({ title: S.videoName.replace(/\.[^.]+$/, ""),
+        artist: p.dropbox ? folderOf(p.dropbox.path) : "", album: "Lecture Karaoke",
+        artwork: cover ? [{ src: look.url, type: art.type }] : [] }) : null;
+    } catch { /* not here */ }
+  }
+}
+$("coverArt").addEventListener("error", () => { if (look.url && !look.failed) { look.failed = true; setLook(); } });   // can't show it: bars
+video.addEventListener("loadedmetadata", () => { learnDuration(S.picked, video.duration); setLook(); });
+
+/** Routes the element's audio through an analyser, once: on a tap or key (so the sound may start),
+ *  while bars are shown for a source that may be measured. */
+function measureSound() {
+  const p = S.picked;
+  if (!canMeasure || audioGraph || player.hidden || $("viz").hidden || !p || (p.url && video.crossOrigin !== "anonymous")) return;
+  try {
+    audioCtx ??= new AudioContext();
+    const route = () => {
+      if (audioGraph || audioCtx.state !== "running" || $("viz").hidden || S.picked !== p) return;
+      const analyser = Object.assign(audioCtx.createAnalyser(), { fftSize: 2048, smoothingTimeConstant: 0.55, minDecibels: -85, maxDecibels: -20 });
+      audioCtx.createMediaElementSource(video).connect(analyser).connect(audioCtx.destination);
+      audioGraph = { analyser };
+    };
+    if (audioCtx.state === "running") route();
+    else audioCtx.resume().then(route, () => {});
+  } catch { /* the bars follow the transcript instead */ }
+}
+for (const ev of ["click", "keydown"]) addEventListener(ev, measureSound, true);
+video.addEventListener("play", () => { if (audioGraph && audioCtx.state !== "running") audioCtx.resume().catch(() => {}); });
 
 // The MP4's own caption track would be drawn over the app by Safari: keep it off.
 const captionsOff = () => { for (const t of video.textTracks) t.mode = "disabled"; };
@@ -1490,10 +1638,11 @@ function goHome() {
   video.pause();
   save();
   player.hidden = true;
+  setLook();
   $("welcome").hidden = false;
   document.title = "Lecture Karaoke";
   Object.assign(S, { videoFile: null, jsonFile: null, picked: S.picked, wanted: null });
-  setStep("video", "Choose the lecture video", false);
+  setStep("video", "Choose the lecture video or audio", false);
   setStep("json", "Choose its .json file", false);
   updateStart();
   drawRecent();
@@ -1651,26 +1800,32 @@ $("reloadBtn").addEventListener("click", () => location.reload());
 // Development only (localhost): ?video=URL&json=URL opens files served by dev/serve.mjs.
 if (dev) {
   window.__lk = { S, video, prefs, store, activeEvent, spokenCount, syncFixes, library, pickedVideo, openFromDropbox, renewStream,
-    loadLibrary, pollTranscript, get gh() { return gh; }, get dbx() { return dbx; }, get W() { return W; }, get stream() { return stream; },
-    get transfer() { return transfer; } };   // for checks
+    loadLibrary, pollTranscript, probeMedia, viz, get gh() { return gh; }, get dbx() { return dbx; }, get W() { return W; },
+    get stream() { return stream; }, get transfer() { return transfer; }, get audioGraph() { return audioGraph; } };   // for checks
   const q = new URLSearchParams(location.search);
   // ?pick=URL: as if that file had been picked on this device
   if (q.get("pick")) {
     (async () => {
       const url = q.get("pick"), blob = await (await fetch(url)).blob();
-      pickedVideo(new File([blob], decodeURIComponent(url.split("/").pop()), { type: "video/mp4" }));
+      pickedVideo(new File([blob], decodeURIComponent(url.split("/").pop()), { type: blob.type }));
     })().catch((err) => setProblems([`Dev pick failed: ${err.message}`]));
   }
   if (q.get("video") && q.get("json")) {
     (async () => {
-      const vurl = q.get("video");
+      const vurl = q.get("video"), name = decodeURIComponent(vurl.split("/").pop());
       const data = await (await fetch(q.get("json"))).json();
-      const size = Number((await fetch(vurl, { method: "HEAD" })).headers.get("Content-Length"));
-      const read = async (offset, length) => new Uint8Array(await (await fetch(vurl,
-        { headers: { Range: `bytes=${offset}-${offset + length - 1}` } })).arrayBuffer());
-      const info = await readMp4Info(read, size);
-      await openPair(data, { url: vurl, name: decodeURIComponent(vurl.split("/").pop()), size, info,
-        fingerprint: await videoFingerprint(info, size) }, { ref: null, key: null });
+      let picked;
+      if (mediaKind(name) === "mp4") {
+        const size = Number((await fetch(vurl, { method: "HEAD" })).headers.get("Content-Length"));
+        const read = async (offset, length) => new Uint8Array(await (await fetch(vurl,
+          { headers: { Range: `bytes=${offset}-${offset + length - 1}` } })).arrayBuffer());
+        const info = await readMp4Info(read, size), audio = !info.tracks.some((t) => t.handler === "vide");
+        picked = { url: vurl, name, size, info, fingerprint: await videoFingerprint(info, size), audio, art: audio ? mp4Artwork(info.moov) : null };
+      } else {   // other audio: read whole, as if picked
+        const { file, ...rest } = await probeMedia(new File([await (await fetch(vurl)).blob()], name));
+        picked = { ...rest, url: vurl, name, size: file.size };
+      }
+      await openPair(data, picked, { ref: null, key: null });
     })().catch((err) => setProblems([`Dev open failed: ${err.message}`]));
   }
 }

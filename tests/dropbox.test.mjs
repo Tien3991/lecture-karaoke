@@ -172,7 +172,7 @@ test("uploads: 8 MB chunks, resumed after an interruption and through lost repli
   assert.ok(readFileSync(path.join(box, "Uploads/Old.mp4")).equals(src));
 });
 
-test("library: Dropbox files matched to index entries by content hash, then by name and size", () => {
+test("library: Dropbox videos and recordings matched to index entries by content hash, then by name and size", () => {
   const file = (p, size, hash) => ({ ".tag": "file", name: p.split("/").pop(), path_lower: p.toLowerCase(), path_display: p, size, content_hash: hash });
   const files = [
     file("/CS224N/Lecture 12.mp4", 100, "h12"),     // its entry knows its hash
@@ -185,6 +185,10 @@ test("library: Dropbox files matched to index entries by content hash, then by n
     file("/Khoá học/Tiếng Việt.MP4", 650, "hv"),
     file("/.staging/fp1-abc.aac", 50, "hs"),        // staged audio isn't a video of the library
     file("/CS224N/slides.pdf", 70, "hp"),
+    file("/Podcasts/Episode 1.mp3", 800, "hmp3"),   // a recording, transcribed: its fingerprint is its content hash
+    file("/Podcasts/Interview.M4A", 900, "hm4a"),    // a recording in an MP4, not transcribed yet
+    file("/Podcasts/Audio only.mp4", 950, "hao"),    // an MP4 its entry knows to have no picture
+    file("/Podcasts/cover.jpg", 30, "hjpg"),
     { ".tag": "folder", name: "CS224N", path_lower: "/cs224n", path_display: "/CS224N" },
   ];
   const videos = [
@@ -197,6 +201,10 @@ test("library: Dropbox files matched to index entries by content hash, then by n
     indexEntry({ key: "Same name", name: "Same name.mp4", size: 600, fingerprint: fp("sn"), dropbox: { path: "/Old/Same name.mp4", hash: "hold" },
       transcript: "transcripts/Same name.json" }),
     indexEntry({ key: "Local", name: "Local.mp4", size: 700, fingerprint: fp("l"), staged: `/.staging/${fp("l")}.aac`, skip_ms: 23 }),
+    indexEntry({ key: "Episode 1", name: "Episode 1.mp3", size: 800, fingerprint: "fa1-hmp3", width: 0, height: 0,
+      dropbox: { path: "/Podcasts/Episode 1.mp3", hash: "hmp3" }, transcript: "transcripts/Episode 1.json" }),
+    indexEntry({ key: "Audio only", name: "Audio only.mp4", size: 950, fingerprint: fp("ao"), width: 0, height: 0,
+      dropbox: { path: "/Podcasts/Audio only.mp4", hash: "hao" }, transcript: "transcripts/Audio only.json" }),
   ];
   const lib = mergeLibrary(files, videos);
   assert.deepEqual(lib.map((i) => [i.path, i.entry?.key ?? null, i.status]), [
@@ -205,13 +213,18 @@ test("library: Dropbox files matched to index entries by content hash, then by n
     ["/CS224N/Lecture 10.mp4", null, null],
     ["/CS224N/Lecture 12.mp4", "Lecture 12", "ready"],
     ["/Khoá học/Tiếng Việt.MP4", null, null],
+    ["/Podcasts/Audio only.mp4", "Audio only", "ready"],
+    ["/Podcasts/Episode 1.mp3", "Episode 1", "ready"],
+    ["/Podcasts/Interview.M4A", null, null],
     ["/Talks/Failed.mp4", "Failed", "failed"],
     ["/Talks/Renamed.mp4", "Lecture 12", "ready"],
     ["/Talks/Same name.mp4", null, null],
   ]);
   assert.deepEqual(lib[3], { name: "Lecture 12.mp4", path: "/CS224N/Lecture 12.mp4", folder: "CS224N", size: 100, hash: "h12",
-    entry: videos[0], status: "ready" });
-  assert.deepEqual(groupByFolder(lib).map((g) => [g.folder, g.items.length]), [["", 1], ["CS224N", 3], ["Khoá học", 1], ["Talks", 3]]);
+    entry: videos[0], status: "ready", audio: false });
+  assert.deepEqual(lib.filter((i) => i.audio).map((i) => i.name), ["Audio only.mp4", "Episode 1.mp3", "Interview.M4A"]);
+  assert.deepEqual(groupByFolder(lib).map((g) => [g.folder, g.items.length]),
+    [["", 1], ["CS224N", 3], ["Khoá học", 1], ["Podcasts", 3], ["Talks", 3]]);
   assert.deepEqual(searchLibrary(lib, "lecture 1").map((i) => i.name), ["Lecture 10.mp4", "Lecture 12.mp4"]);
   assert.deepEqual(searchLibrary(lib, "tieng VIET").map((i) => i.name), ["Tiếng Việt.MP4"], "case and accents ignored");
   assert.equal(searchLibrary(lib, "  ").length, lib.length);
