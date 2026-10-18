@@ -50,6 +50,43 @@ body.dragging .welcome { outline: 3px dashed var(--hi); outline-offset: -10px; }
 .linkish { padding: 0; border: 0; background: none; color: var(--fg); text-decoration: underline; border-radius: 0; }
 @media (hover: none) and (pointer: coarse) { .drop { display: none; } }   /* phones and tablets can't drop files */
 
+/* ---------------------------------------------------------------- the Dropbox library: folders of videos with their state */
+.library h2, .local-head { font-size: 15px; font-weight: 600; color: var(--dim); margin: 22px 0 8px; }
+.lib-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.lib-head .linkish { font-size: 14px; color: var(--dim); }
+.lib-search { width: 100%; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--line); background: #000; font-size: 16px; }
+.lib-note { margin: 6px 0 8px; }
+.lib-list { display: grid; gap: 8px; }
+.lib-folder { border: 1px solid var(--line); border-radius: 14px; background: #0e0e0e; }
+.lib-folder > summary { padding: 12px 14px; cursor: pointer; font-weight: 600; overflow-wrap: anywhere; }
+.lib-count { color: var(--dim); font-weight: 400; }
+.lib-items { list-style: none; margin: 0; padding: 0 6px 6px; display: grid; gap: 4px; }
+.lib-item { width: 100%; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 10px; text-align: left; padding: 10px; border: 0; border-radius: 10px; background: #161616; }
+.lib-title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lib-meta { grid-column: 1 / -1; color: var(--dim); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.badge { align-self: center; padding: 2px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; white-space: nowrap; }
+.badge.ok { background: #1d3320; color: #9be3a4; }
+.badge.busy { background: #363010; color: var(--hi); }
+.badge.bad { background: #3a1818; color: #ffb4b4; }
+.badge.none { background: #222; color: var(--dim); }
+
+/* ---------------------------------------------------------------- getting a transcript: on the start screen, over the
+   empty subtitle area (the video plays meanwhile), and in settings */
+.get { display: grid; gap: 8px; }
+.get[hidden] { display: none; }
+.get > p { margin: 0; }
+.welcome .get { margin: 0 0 12px; padding: 14px; border-radius: 14px; border: 1px solid var(--line); background: #0e0e0e; }
+.get-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.get-actions button { flex: 1 1 auto; }
+.welcome .get .primary { width: auto; margin: 0; padding: 9px 14px; font-size: 16px; }
+.get-error { color: #ffb4b4; overflow-wrap: anywhere; }
+.get progress { width: 100%; height: 8px; accent-color: var(--hi); }
+.live-checking { color: var(--dim); }
+.wait { position: absolute; inset: 0; overflow: auto; place-content: center; padding: 24px max(16px, 6%); text-align: center;
+  font: 16px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; user-select: text; -webkit-user-select: text; }
+.wait .get-actions { justify-content: center; }
+.wait .get-actions button { flex: 0 1 auto; }
+
 /* ---------------------------------------------------------------- player
    Portrait: video on top, subtitles below. Landscape: video left, subtitles right. app.js sets
    --video-size (the video's height in portrait, its width in landscape) from the viewer's split. */
@@ -158,3 +195,10 @@ select, #editorText { width: 100%; padding: 10px; border-radius: 10px; border: 1
 .update { position: fixed; top: calc(8px + env(safe-area-inset-top)); left: 50%; transform: translateX(-50%); padding: 8px 12px; border-radius: 12px;
   background: var(--hi); color: #000; z-index: 11; white-space: nowrap; }
 .update button { margin-left: 8px; padding: 4px 10px; background: #000; color: var(--hi); border: 0; }
+/* an upload running while no box on screen shows it */
+.transfer { position: fixed; top: calc(8px + env(safe-area-inset-top)); left: 50%; transform: translateX(-50%); max-width: calc(100vw - 32px);
+  display: flex; align-items: center; gap: 10px; padding: 6px 8px 6px 14px; border-radius: 12px; background: #222; color: var(--fg);
+  box-shadow: 0 6px 24px rgba(0,0,0,.5); z-index: 10; font-size: 14px; white-space: nowrap; }
+.transfer[hidden] { display: none; }
+.transfer span { overflow: hidden; text-overflow: ellipsis; }
+.transfer button { padding: 4px 10px; }

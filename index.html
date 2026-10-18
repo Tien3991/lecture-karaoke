@@ -7,8 +7,8 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Karaoke">
-<meta name="app-version" content="1.3.0">
-<meta name="description" content="Plays your lecture videos with live karaoke subtitles from their Soniox transcripts. Files stay on your device.">
+<meta name="app-version" content="2.0.0">
+<meta name="description" content="Plays your lecture videos, from your device or your Dropbox, with live karaoke subtitles from their Soniox transcripts; new videos get transcribed on GitHub.">
 <title>Lecture Karaoke</title>
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icons/icon-192.png">
@@ -19,11 +19,21 @@
 <body>
 <main id="welcome" class="welcome">
   <h1>Lecture Karaoke</h1>
-  <p class="intro">Plays a lecture video with live karaoke subtitles from its transcript. Videos stay on this device; transcripts can come from your private GitHub repository.</p>
+  <p class="intro">Plays a lecture video with live karaoke subtitles from its transcript. Videos come from this device or your Dropbox; transcripts come from your private GitHub repository, where new videos get transcribed.</p>
   <section id="recent" class="recent" hidden>
     <h2>Recent</h2>
     <ul id="recentList" class="recent-list"></ul>
   </section>
+  <section id="library" class="library" hidden>
+    <div class="lib-head">
+      <h2>Dropbox</h2>
+      <button type="button" id="libCheck" class="linkish" title="Start the transcription job now for videos added to Dropbox (it also runs on a schedule)">Check now</button>
+    </div>
+    <input type="search" id="libSearch" class="lib-search" placeholder="Search videos" aria-label="Search the videos in Dropbox" autocomplete="off" spellcheck="false">
+    <p id="libNote" class="small lib-note" role="status"></p>
+    <div id="libList" class="lib-list"></div>
+  </section>
+  <h2 id="localHead" class="local-head" hidden>On this device</h2>
   <div class="pickers">
     <label class="pick">
       <input type="file" id="pickVideo" accept="video/mp4,.mp4,video/*">
@@ -36,6 +46,7 @@
       <span><b>Transcript</b><br><span id="jsonName" class="pick-name">Choose its .json file</span></span>
     </label>
   </div>
+  <div id="getBox" class="get" role="status" hidden></div>
   <p id="iosHint" class="hint" hidden>On iPhone and iPad, pick files with <b>Choose File</b> (the Files app), not the photo library. Add the app to the Home Screen to watch full screen.</p>
   <p class="hint drop">You can also drop both files here.</p>
   <div id="problems" class="problems" role="alert"></div>
@@ -50,6 +61,8 @@
     <div id="cur" class="cur"></div>
     <div id="next" class="ctx next"></div>
     <div id="splitter" class="splitter" title="Drag to resize the video and the subtitles (double-click: automatic)"></div>
+    <!-- While the video has no transcript: what is happening, and what can be done. -->
+    <div id="waitBox" class="get wait" role="status" hidden></div>
   </div>
   <!-- Two rows, filled from the viewer's arrangement (app.js renderBar); parts not shown wait in barParts. -->
   <div class="bar" id="bar">
@@ -131,6 +144,10 @@
       <p id="ghNote" class="small top"></p>
       <button type="button" id="ghOpen">GitHub settings</button>
     </fieldset>
+    <fieldset id="dbxSet" hidden>
+      <legend>Dropbox</legend>
+      <div id="dbxBox" class="get"></div>
+    </fieldset>
     <fieldset>
       <legend>Word fixes</legend>
       <ul id="fixList" class="fix-list"></ul>
@@ -169,7 +186,7 @@
       <input id="ghRepo" placeholder="owner/name" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
     <label class="field">Token
       <input id="ghToken" type="password" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
-    <p class="small">A fine-grained GitHub token for this repository only, with Contents: read and write. It stays on this device.</p>
+    <p class="small">A fine-grained GitHub token for this repository only, with Contents: read and write (and Actions: read and write, to start transcriptions). It stays on this device.</p>
     <p id="ghStatus" class="small status" role="status"></p>
     <div class="dialog-buttons">
       <button type="button" id="ghRemove" class="left">Disconnect</button>
@@ -192,9 +209,25 @@
   </form>
 </dialog>
 
+<dialog id="uploadDialog">
+  <form method="dialog">
+    <h2>Upload to Dropbox</h2>
+    <p id="uploadWhat" class="small top"></p>
+    <label class="field">Folder
+      <input id="uploadFolder" list="uploadFolders" placeholder="empty: the top level" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
+    <datalist id="uploadFolders"></datalist>
+    <p class="small">A folder per course keeps the library tidy. Keep this page open while it uploads; if it stops, it continues from where it was.</p>
+    <div class="dialog-buttons">
+      <button type="button" id="uploadCancel">Cancel</button>
+      <button value="upload" class="primary">Upload</button>
+    </div>
+  </form>
+</dialog>
+
 <!-- Kept for 1.0.x scripts: during their update they can briefly run against this page. -->
 <input type="hidden" id="leadCustom">
 <div id="toast" class="toast" role="status" hidden></div>
+<div id="transferLine" class="transfer" role="status" hidden><span id="transferText"></span> <button type="button" id="transferStop">Stop</button></div>
 <div id="updateBanner" class="update" hidden>A new version is ready. <button id="reloadBtn">Reload</button></div>
 </body>
 </html>

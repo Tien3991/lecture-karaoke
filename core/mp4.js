@@ -1,7 +1,10 @@
 // Minimal MP4 reader. It finds the moov box (at the start or the end of the file, reading only
 // that box) and reports what the player needs: duration, video size, and how long each track's
 // leading empty edit delays its start. Soniox counts from the first audio sample, so the audio
-// track's delay is the offset between the transcript's clock and the video's clock.
+// track's delay is the offset between the transcript's clock and the video's clock. It also
+// reports where each track's media starts (the media time of its first real edit): decoders
+// drop the samples before it, so audio copied out of the file without the edit list (core/
+// audio.js) has that much more at its start.
 const latin1 = new TextDecoder("latin1");
 
 /** read(offset, length) -> Promise<Uint8Array>; size = file size in bytes. */
@@ -40,7 +43,7 @@ export async function videoFingerprint(info, size) {
 export const blobReader = (blob) => async (offset, length) =>
   new Uint8Array(await blob.slice(offset, offset + length).arrayBuffer());
 
-function* boxes(buf, start = 0, end = buf.length) {
+export function* boxes(buf, start = 0, end = buf.length) {
   const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
   for (let off = start; off + 8 <= end;) {
     let size = dv.getUint32(off), header = 8;
@@ -68,7 +71,7 @@ function parseElst(buf, box) {
 }
 
 function parseTrak(buf, trak) {
-  const t = { handler: "", width: 0, height: 0, edits: [], mediaTimescale: 0 };
+  const t = { handler: "", width: 0, height: 0, edits: [], mediaTimescale: 0, box: [trak.start, trak.end] };
   for (const b of boxes(buf, trak.start, trak.end)) {
     if (b.type === "tkhd") {
       t.width = b.dv.getUint32(b.end - 8) / 65536;
@@ -101,12 +104,15 @@ function parseMoov(buf) {
     let empty = 0;
     for (const e of t.edits) { if (e.mediaTime !== -1) break; empty += e.duration; }
     t.startSec = timescale ? empty / timescale : 0;
+    const first = t.edits.find((e) => e.mediaTime !== -1);   // the media before this isn't shown
+    t.skipSec = first && t.mediaTimescale ? first.mediaTime / t.mediaTimescale : 0;
   }
   const video = tracks.find((t) => t.handler === "vide");
   const audio = tracks.find((t) => t.handler === "soun");
   return {
     durationSec: timescale ? duration / timescale : 0,
     width: video ? video.width : 0, height: video ? video.height : 0,
-    videoStartSec: video ? video.startSec : 0, audioStartSec: audio ? audio.startSec : 0, tracks,
+    videoStartSec: video ? video.startSec : 0, audioStartSec: audio ? audio.startSec : 0,
+    audioSkipSec: audio ? audio.skipSec : 0, tracks,
   };
 }

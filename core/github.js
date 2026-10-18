@@ -5,8 +5,11 @@
 //
 // Repository layout (shared with vertical_video_maker):
 //   index.json               {"videos": [{key, name, size, fingerprint, transcript, ...}]}
+//                            (every field: core/library.js)
 //   transcripts/<key>.json   app-ready Soniox transcript
 //   fixes/<key>.json         {"fixes": [{start_ms, old, new}]}: word fixes made in the app
+//   config/dropbox.json      {"app_key", "refresh_token"}: the Dropbox app folder (core/dropbox.js)
+//   .github/workflows/transcribe.yml   the transcription job, started here by dispatch()
 
 export class GitHubError extends Error {
   constructor(kind, message) { super(message); this.kind = kind; }   // kind: offline, token, access, missing, other
@@ -87,15 +90,49 @@ export class GitHub {
     return (await res.json()).content.sha;
   }
 
-  /** Read-modify-write of a small JSON file, retried when another device wrote meanwhile.
-   *  change(data or null) returns the new data, or undefined to leave the file alone. */
+  /** A JSON file of any size with the sha needed to write it back: {data, sha} or null. It is
+   *  read raw (the base64 contents stop at 1 MB, and index.json grows past that); for the raw
+   *  media type GitHub's ETag is the file's blob sha, and if it ever isn't, the sha is computed. */
+  async readForUpdate(file) {
+    const res = await this.call(`/contents/${enc(file)}`, { accept: "application/vnd.github.raw+json" });
+    if (res.status === 404) return null;
+    if (!res.ok) throw await problem(res);
+    const etag = res.headers.get("ETag") || "", bytes = new Uint8Array(await res.arrayBuffer());
+    const sha = /^(?:W\/)?"([0-9a-f]{40})"$/.exec(etag)?.[1] ?? await blobSha(bytes);
+    return { data: JSON.parse(new TextDecoder().decode(bytes)), sha };
+  }
+
+  /** Read-modify-write of a JSON file, retried when another device (or the transcription job)
+   *  wrote meanwhile. change(data or null) returns the new data, or undefined to leave the file
+   *  alone. */
   async update(file, change, message) {
-    for (let attempt = 0; attempt < 4; attempt++) {
-      const cur = await this.readJson(file);
+    for (let attempt = 0; attempt < 5; attempt++) {
+      if (attempt) await new Promise((r) => setTimeout(r, 400 * attempt));
+      const cur = await this.readForUpdate(file);
       const next = change(cur ? cur.data : null);
       if (next === undefined) return cur ? cur.data : null;
       if (await this.write(file, JSON.stringify(next, null, 1) + "\n", cur?.sha, message)) return next;
     }
     throw new GitHubError("other", `${file} kept changing on GitHub; try again.`);
   }
+
+  /** Starts the transcription job (the repository's transcribe.yml) for one index entry, or with
+   *  an empty item for everything waiting. The token needs Actions: read and write. */
+  async dispatch(item = "", workflow = "transcribe.yml") {
+    const res = await this.call(`/actions/workflows/${enc(workflow)}/dispatches`,
+      { method: "POST", body: { ref: "main", inputs: { item } } });
+    if (res.ok) return true;
+    const err = await problem(res);
+    if (err.kind === "access") err.message = "The token can't start the transcription job: it needs Actions: read and write on this repository.";
+    if (err.kind === "missing") err.message = `The transcription job (.github/workflows/${workflow}) isn't in the repository, or the token can't see Actions.`;
+    throw err;
+  }
+}
+
+/** Git's blob sha of a file's bytes, the version a write must name. */
+async function blobSha(bytes) {
+  const head = new TextEncoder().encode(`blob ${bytes.length}\0`), buf = new Uint8Array(head.length + bytes.length);
+  buf.set(head);
+  buf.set(bytes, head.length);
+  return [...new Uint8Array(await crypto.subtle.digest("SHA-1", buf))].map((b) => b.toString(16).padStart(2, "0")).join("");
 }

@@ -1,14 +1,20 @@
-// Lecture Karaoke: plays a local lecture video with live karaoke subtitles from its Soniox
-// transcript. The subtitle rules are the vertical_video_maker pipeline's (ported in core/).
+// Lecture Karaoke: plays a lecture video, from this device or from Dropbox, with live karaoke
+// subtitles from its Soniox transcript. The subtitle rules are the vertical_video_maker pipeline's
+// (ported in core/). Videos without a transcript get one from the transcription job in GitHub
+// Actions, which reads them (or just their audio) from Dropbox.
 import { CONJ_BY_LANGUAGE, wordsFromTranscript } from "./core/transcript.js";
 import { activeEvent, buildEvents, buildPieces, spokenCount } from "./core/timeline.js";
 import { blobReader, readMp4Info, videoFingerprint } from "./core/mp4.js";
 import { applyFixes, exportTranscript, transcriptText } from "./core/corrections.js";
 import { GitHub } from "./core/github.js";
+import { Dropbox, LINK_MS, contentHash } from "./core/dropbox.js";
+import { extractAdts } from "./core/audio.js";
+import { STAGING, VIDEO_FILE, changedEntry, entryStatus, folderOf, groupByFolder, indexEntry, isoNow, keyFor, mergeLibrary, searchLibrary,
+  withEntry } from "./core/library.js";
 import { applyDeltas, deltaFor, sameFixes } from "./core/sync.js";
 import * as store from "./core/store.js";
 
-const VERSION = "1.3.0";
+const VERSION = "2.0.0";
 // Proportions of the burned vertical video (identical in every pipeline calibration), in em of
 // the main subtitle text: line limit, frame width, and the height the three blocks need.
 const FIT_EM = 892.4 / 67.797, FRAME_EM = 1080 / 67.797, PANEL_EM = 14.4, CTX_SCALE = 74 / 93;
@@ -22,11 +28,15 @@ const isFirefox = /Firefox\//.test(navigator.userAgent);
 const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
 const isMobile = isIOS || /Android/i.test(navigator.userAgent);
 const dev = ["localhost", "127.0.0.1"].includes(location.hostname);
-/** Development only: ?api=/mock-github points the app at dev/serve.mjs's stand-in for GitHub. */
-const devApi = () => {
-  const api = dev && new URLSearchParams(location.search).get("api");
-  return api ? new URL(api, location.href).href.replace(/\/$/, "") : undefined;
-};
+/** Development only: ?api=/mock-github and ?dropbox=/mock-dropbox point the app at dev/serve.mjs's
+ *  stand-ins for GitHub and Dropbox. */
+const devParam = (name) => (dev ? new URLSearchParams(location.search).get(name) : null);
+const devUrl = (name) => { const u = devParam(name); return u ? new URL(u, location.href).href.replace(/\/$/, "") : undefined; };
+const devApi = () => devUrl("api");
+// A video waiting for its transcript checks the index every 20 s; a Dropbox link (4 hours) is
+// renewed 15 minutes before it ends. Development: ?poll= and ?linkAge= in seconds.
+const POLL_MS = (Number(devParam("poll")) || 20) * 1000;
+const LINK_RENEW_MS = (Number(devParam("linkAge")) * 1000) || LINK_MS - 15 * 60 * 1000;
 
 // The page and this script must be the same release. A service-worker update could briefly pair
 // them across releases (the page fresh, the script cached): reload once to get a matching pair.
@@ -45,6 +55,8 @@ const S = {
   videoFile: null, jsonFile: null, picked: null, wanted: null, videoUrl: null, videoName: "", transcript: null,
   id: null, rec: {}, repoKey: null, baseWords: [], words: [], pieces: [], events: [], durationMs: 0, audioOffsetMs: 0,
   leadMs: 0, syncMs: 0, language: "en", editing: false, shown: -2, spoken: -1, lastSecond: -1,
+  playing: false,    // the viewer's play/pause, kept while a Dropbox link is renewed (swapping)
+  swapping: false,
 };
 
 // ---------------------------------------------------------------- viewer preferences
@@ -52,7 +64,7 @@ const S = {
 // video/subtitle split for each orientation. (Position, sync, language and fixes are kept per
 // transcript in IndexedDB.) The key carries the app prefix: all Pages projects share one origin.
 const PREFS_KEY = "lecture-karaoke.prefs";
-const prefs = { rate: 1, offsetMs: 3000, offsetOn: false, split: { portrait: null, landscape: null }, bar: null };
+const prefs = { rate: 1, offsetMs: 3000, offsetOn: false, split: { portrait: null, landscape: null }, bar: null, uploadFolder: "Uploads" };
 try {
   const saved = JSON.parse(localStorage.getItem(PREFS_KEY) || "{}");
   Object.assign(prefs, saved, { split: { ...prefs.split, ...saved.split } });
@@ -105,6 +117,7 @@ function connect(cfg) {
   gh = cfg?.repo && cfg?.token ? new GitHub({ repo: cfg.repo, token: cfg.token, api: devApi() }) : null;
   $("ghLine").textContent = gh ? `GitHub: ${gh.repo}` : "Connect GitHub";
   drawSyncNote();
+  connectDropbox().then(() => { loadLibrary(); renderGet(); });
 }
 /** A repository file through this device's copy: offline it opens anyway, and an unchanged file
  *  isn't downloaded again. {text, etag} or null when the file doesn't exist. */
@@ -123,6 +136,210 @@ async function repoIndex() {
   const f = await repoFile("index.json");
   return f ? JSON.parse(f.text) : { version: 1, videos: [] };
 }
+
+// ---------------------------------------------------------------- Dropbox
+// The app's own Dropbox folder (core/dropbox.js), reached with the refresh token in the
+// repository's config/dropbox.json: a device connected to GitHub needs nothing more. The folder's
+// listing is kept on the device with Dropbox's cursor, so later visits only ask what changed.
+let dbx = null, dbxReady = Promise.resolve(null);
+function connectDropbox() {
+  const mine = gh;
+  dbx = null;
+  dbxReady = !gh ? Promise.resolve(null) : repoFile("config/dropbox.json").then((f) => {
+    const cfg = f && JSON.parse(f.text), base = devUrl("dropbox");
+    if (gh !== mine || !cfg?.app_key || !cfg?.refresh_token) return null;
+    return (dbx = new Dropbox({ appKey: cfg.app_key, refreshToken: cfg.refresh_token, ...(base ? { api: base, content: `${base}/content` } : {}) }));
+  }).catch(() => null);
+  return dbxReady;
+}
+const listed = (e) => ({ name: e.name, path_lower: e.path_lower, path_display: e.path_display, size: e.size, content_hash: e.content_hash });
+/** The app folder's files, brought up to date: {files, offline}. Offline, the copy kept here. */
+async function dropboxFiles() {
+  const key = `dropbox:${dbx.appKey}:files`, kept = await store.getFile(key);
+  let files = kept?.files ? { ...kept.files } : null, cursor = kept?.cursor;
+  try {
+    if (files && cursor) {
+      try {
+        const changed = await dbx.changes(cursor);
+        for (const e of changed.entries) {
+          if (e[".tag"] === "file") files[e.path_lower] = listed(e);
+          else if (e[".tag"] === "deleted") {
+            for (const p of Object.keys(files)) if (p === e.path_lower || p.startsWith(`${e.path_lower}/`)) delete files[p];
+          }
+        }
+        cursor = changed.cursor;
+      } catch (err) {
+        if (err.kind === "offline") throw err;
+        files = null;   // the cursor isn't accepted any more (reset, or another account): list afresh
+      }
+    }
+    if (!files) {
+      const all = await dbx.list();
+      files = Object.fromEntries(all.entries.filter((e) => e[".tag"] === "file").map((e) => [e.path_lower, listed(e)]));
+      cursor = all.cursor;
+    }
+    await store.putFile(key, { files, cursor });
+    return { files: Object.values(files), offline: false };
+  } catch (err) {
+    if (err.kind === "offline" && kept?.files) return { files: Object.values(kept.files), offline: true };
+    throw err;
+  }
+}
+
+// ---------------------------------------------------------------- the Dropbox library (start screen)
+// The videos in Dropbox by folder, each with what the repository knows of it: ready, being
+// transcribed, not transcribed yet, or failed (core/library.js matches them). A tap streams it.
+const library = { items: [], loading: null, opening: false, note: "", watchUntil: 0 };
+const openFolders = new Set();
+const BADGES = { ready: ["Ready", "ok"], pending: ["Transcribing", "busy"], failed: ["Failed", "bad"], null: ["Not transcribed", "none"] };
+/** Brings the list up to date (one load at a time: a second call gets the running one). */
+function loadLibrary() {
+  $("library").hidden = $("localHead").hidden = !dbx;
+  if (!dbx) return Promise.resolve();
+  if (!library.loading) {
+    library.loading = (async () => {
+      try {
+        const [{ files, offline }, index] = await Promise.all([dropboxFiles(), repoIndex()]);
+        library.items = mergeLibrary(files, index.videos || []);
+        library.note = offline ? "Offline: the list as it was last time." : "";
+      } catch (err) {
+        library.note = `Dropbox: ${err.message}`;
+      }
+    })().finally(() => {
+      library.loading = null;
+      drawLibrary();
+    });
+    drawLibrary();
+  }
+  return library.loading;
+}
+const mb = (bytes) => `${bytes >= 1e9 ? (bytes / 1e9).toFixed(1) : Math.max(1, Math.round(bytes / 1e6))} ${bytes >= 1e9 ? "GB" : "MB"}`;
+function drawLibrary() {
+  const q = $("libSearch").value.trim(), items = searchLibrary(library.items, q), groups = groupByFolder(items);
+  const n = library.items.length, busy = library.items.filter((i) => i.status === "pending").length;
+  $("libNote").textContent = library.note || (library.loading && !n ? "Loading…"
+    : !n ? "No videos yet. Put them in Dropbox, in Apps/Lecture Karaoke (a folder per course)."
+    : q && !items.length ? "Nothing matches." : `${n} video${n === 1 ? "" : "s"}${busy ? `, ${busy} being transcribed` : ""}.`);
+  $("libList").replaceChildren(...groups.map((g) => {
+    const d = Object.assign(document.createElement("details"), { className: "lib-folder", open: !!q || groups.length === 1 || openFolders.has(g.folder) });
+    d.addEventListener("toggle", () => { if (!$("libSearch").value.trim()) (d.open ? openFolders.add(g.folder) : openFolders.delete(g.folder)); });
+    const summary = document.createElement("summary");
+    summary.append(g.folder || "Lecture Karaoke", Object.assign(document.createElement("span"), { className: "lib-count", textContent: ` ${g.items.length}` }));
+    const ul = Object.assign(document.createElement("ul"), { className: "lib-items" });
+    ul.append(...g.items.map((it) => {
+      const [label, cls] = BADGES[it.status], b = Object.assign(document.createElement("button"), { type: "button", className: "lib-item" });
+      const meta = [it.entry?.duration_ms ? clock(it.entry.duration_ms / 1000) : "", mb(it.size), it.status === "failed" ? it.entry.error : ""];
+      b.append(Object.assign(document.createElement("span"), { className: "lib-title", textContent: it.name.replace(/\.[^.]+$/, "") }),
+        Object.assign(document.createElement("span"), { className: `badge ${cls}`, textContent: label }),
+        Object.assign(document.createElement("span"), { className: "lib-meta", textContent: meta.filter(Boolean).join(" · ") }));
+      b.addEventListener("click", () => openFromDropbox(it));
+      const li = document.createElement("li");
+      li.append(b);
+      return li;
+    }));
+    d.append(summary, ul);
+    return d;
+  }));
+}
+$("libSearch").addEventListener("input", drawLibrary);
+$("libCheck").addEventListener("click", async () => {
+  $("libCheck").disabled = true;
+  try {
+    await gh.dispatch("");
+    library.watchUntil = Date.now() + 20 * 60000;
+    toast("The transcription job is looking for new videos; it takes a few minutes.");
+  } catch (err) {
+    toast(err.message);
+  } finally {
+    $("libCheck").disabled = false;
+  }
+});
+// While anything is being transcribed (or just after Check now), the list refreshes every minute.
+setInterval(() => {
+  if (dbx && player.hidden && (Date.now() < library.watchUntil || library.items.some((i) => i.status === "pending"))) loadLibrary();
+}, 60000);
+
+/** What the player needs from a Dropbox video: from its index entry (when it names this very file),
+ *  else from the file's MP4 index (moov), read with byte ranges and kept on the device. */
+async function dropboxVideoInfo(it) {
+  const e = it.entry;
+  if (e?.fingerprint && e.dropbox?.hash === it.hash && [e.duration_ms, e.audio_start_ms, e.width, e.height].every(Number.isFinite)) {
+    return { info: { durationSec: e.duration_ms / 1000, audioStartSec: e.audio_start_ms / 1000, width: e.width, height: e.height },
+      fingerprint: e.fingerprint };
+  }
+  const key = `dropbox:info:${it.hash}`, kept = await store.getFile(key);
+  if (kept) return kept;
+  const mp4 = await readMp4Info((offset, length) => dbx.download(it.path, offset, Math.min(offset + length, it.size) - 1), it.size);
+  const got = { info: { durationSec: mp4.durationSec, audioStartSec: mp4.audioStartSec, width: mp4.width, height: mp4.height },
+    fingerprint: await videoFingerprint(mp4, it.size) };
+  await store.putFile(key, got);
+  return got;
+}
+
+/** Streams a library video: with its transcript when it has one, else playing while it waits. */
+async function openFromDropbox(it) {
+  if (!dbx || library.opening) return;
+  library.opening = true;
+  setProblems([]);
+  $("libNote").textContent = `Opening ${it.name}…`;
+  try {
+    const { info, fingerprint } = await dropboxVideoInfo(it);
+    const { link } = await dbx.temporaryLink(it.path);
+    const picked = { url: link, name: it.name, size: it.size, info, fingerprint, dropbox: { path: it.path, hash: it.hash } };
+    // an entry found by name and size must be this very video
+    const entry = it.entry && (!it.entry.fingerprint || it.entry.fingerprint === fingerprint) ? it.entry : null;
+    if (entryStatus(entry) === "ready") {
+      const ref = `gh:${gh.repo}:${entry.transcript}`, text = await transcriptFile(ref);
+      if (!text) throw new Error("its transcript isn't on this device, and GitHub can't be reached.");
+      await openPair(JSON.parse(text), picked, { ref, key: entry.key, sure: true });
+    } else {
+      openWaiting(picked);
+    }
+    if (S.picked === picked) {
+      stream = { path: it.path, fetched: Date.now(), renewing: false, lastError: 0 };
+      trackVideo(picked, entry);
+    }
+  } catch (err) {
+    setProblems([`Could not open ${it.name}: ${err.message}`]);
+  } finally {
+    library.opening = false;
+    drawLibrary();
+  }
+}
+
+// A Dropbox link lasts 4 hours: it is renewed before then, and at once when the video stops with an
+// error (an expired link), keeping the position and whether it was playing.
+let stream = null;   // {path, fetched, renewing, lastError}
+async function renewStream() {
+  const s = stream;
+  if (!s || s.renewing || !dbx) return;
+  s.renewing = true;
+  const at = video.currentTime, playing = S.playing;   // read at once: an expired link also pauses the video
+  try {
+    const { link } = await dbx.temporaryLink(s.path);
+    if (stream !== s) return;
+    s.fetched = Date.now();
+    S.picked.url = S.videoUrl = link;
+    S.swapping = true;
+    video.addEventListener("loadedmetadata", () => {
+      video.currentTime = at;
+      S.swapping = false;
+      if (playing) video.play().catch(() => {});
+    }, { once: true });
+    video.src = link;
+  } catch (err) {
+    if (stream === s) toast(`The Dropbox link couldn't be renewed: ${err.message}`);
+  } finally {
+    s.renewing = false;
+  }
+}
+setInterval(() => { if (stream && !player.hidden && Date.now() - stream.fetched > LINK_RENEW_MS) renewStream(); }, 10000);
+video.addEventListener("error", () => {
+  S.swapping = false;
+  if (!stream || Date.now() - stream.lastError < 20000) return;   // an error right after renewing isn't the link
+  stream.lastError = Date.now();
+  renewStream();
+});
 
 // ---------------------------------------------------------------- opening files
 const problems = $("problems");
@@ -163,6 +380,9 @@ async function probeVideo(file) {
 async function pickedVideo(file, { lookup = true } = {}) {
   const wanted = S.wanted;
   Object.assign(S, { videoFile: file, jsonFile: null, picked: null, wanted: null });
+  W = null;
+  stopPolling();
+  renderGet();
   setStep("video", file.name, true);
   setStep("json", lookup ? "Looking for its transcript…" : "Choose its .json file", false);
   setProblems([]);
@@ -173,15 +393,25 @@ async function pickedVideo(file, { lookup = true } = {}) {
     if (wanted?.video?.fingerprint && wanted.video.fingerprint !== S.picked.fingerprint) {
       toast(`That isn't “${wanted.title}”; looking for this video's transcript.`);
     }
-    const found = await findTranscript(S.picked);
-    if (!found) {
+    const found = await findTranscript(S.picked), picked = S.picked;
+    if (found?.ref) {
+      setStep("json", found.label, true);
+      const text = await transcriptFile(found.ref);
+      if (!text) throw new Error("Its transcript isn't on this device, and GitHub can't be reached.");
+      await openPair(JSON.parse(text), picked, found);
+      if (S.picked === picked && !player.hidden && (await dbxReady)) trackVideo(picked, found.entry);   // offers Upload to Dropbox
+      return;
+    }
+    await dbxReady;
+    if (S.picked !== picked) return;
+    if (!dbx) {   // transcripts can be made only through Dropbox
       setStep("json", gh ? "Not on GitHub yet: choose its .json file" : "Choose its .json file", false);
       return;
     }
-    setStep("json", found.label, true);
-    const text = await transcriptFile(found.ref);
-    if (!text) throw new Error("Its transcript isn't on this device, and GitHub can't be reached.");
-    await openPair(JSON.parse(text), S.picked, found);
+    const status = entryStatus(found?.entry);
+    setStep("json", status === "pending" ? "Being transcribed: see below" : status === "failed" ? "Its transcription failed: see below"
+      : "No transcript yet: see below, or choose its .json file", false);
+    trackVideo(picked, found?.entry, { welcome: true });
   } catch (err) {
     setStep("json", "Choose its .json file", false);
     setProblems([err.kind ? err.message : `Could not open this video: ${err.message}`]);
@@ -195,7 +425,8 @@ function pickedJson(file) {
 }
 
 /** Where this video's transcript is: on GitHub (by fingerprint; by file name only after asking),
- *  or a lecture opened on this device before (this also works offline). */
+ *  or a lecture opened on this device before (this also works offline). {ref, key, label, entry};
+ *  just {entry} while the repository's entry waits for its transcript (pending or failed). */
 async function findTranscript({ file, fingerprint }) {
   const mine = (await store.list()).find((r) => r.video?.fingerprint === fingerprint && r.transcriptRef);
   let entry = null;
@@ -203,15 +434,15 @@ async function findTranscript({ file, fingerprint }) {
     try {
       const videos = (await repoIndex()).videos || [];
       entry = videos.find((v) => v.fingerprint === fingerprint) || null;
-      const byName = !entry && !mine && videos.find((v) => v.name === file.name);
+      const byName = !entry && !mine && videos.find((v) => v.name === file.name && v.transcript);
       if (byName && confirm(`GitHub has a transcript for a video named “${file.name}”, but made from a different file. Use it anyway?`)) entry = byName;
     } catch (err) {
       if (!mine) throw err;
     }
   }
-  if (entry) return { ref: `gh:${gh.repo}:${entry.transcript}`, key: entry.key, label: "Found on GitHub" };
-  if (mine) return { ref: mine.transcriptRef, key: mine.repoKey ?? null, label: "Opened on this device before" };
-  return null;
+  if (entry?.transcript) return { ref: `gh:${gh.repo}:${entry.transcript}`, key: entry.key, label: "Found on GitHub", entry };
+  if (mine) return { ref: mine.transcriptRef, key: mine.repoKey ?? null, label: "Opened on this device before", entry };
+  return entry ? { entry } : null;
 }
 async function transcriptFile(ref) {
   if (gh && ref.startsWith(`gh:${gh.repo}:`)) return (await repoFile(ref.slice(`gh:${gh.repo}:`.length)))?.text ?? null;
@@ -224,14 +455,16 @@ $("startBtn").addEventListener("click", async () => {
     const text = await S.jsonFile.text();
     const picked = S.picked?.file === S.videoFile ? S.picked : (S.picked = await probeVideo(S.videoFile));
     await openPair(JSON.parse(text), picked, { ref: null, key: null, text });
+    if (S.picked === picked && !player.hidden && W?.picked !== picked && (await dbxReady)) trackVideo(picked, null);
   } catch (err) {
     setProblems([`Could not open these files: ${err.message}`]);
     $("startBtn").disabled = false;
   }
 });
 
-/** Checks that the video and transcript belong together. Returns problems to show. */
-function pairingProblems(data, info, name, size, fingerprint, rec) {
+/** Checks that the video and transcript belong together. Returns problems to show. sure: the
+ *  repository matched them by content, so a different file name doesn't matter. */
+function pairingProblems(data, info, name, size, fingerprint, rec, sure) {
   const out = [];
   if (!Array.isArray(data.tokens) || !data.tokens.length || !("start_ms" in data.tokens[0])) {
     return ["The transcript isn't a Soniox transcript JSON (no tokens with times)."];
@@ -239,7 +472,7 @@ function pairingProblems(data, info, name, size, fingerprint, rec) {
   if (info.height > info.width) {
     return ["This is a vertical video, probably one already rendered with subtitles. Pick the original video instead."];
   }
-  if (data.video && data.video !== name) out.push(`This transcript was made for “${data.video}”, not “${name}”.`);
+  if (!sure && data.video && data.video !== name) out.push(`This transcript was made for “${data.video}”, not “${name}”.`);
   const lastMs = data.tokens[data.tokens.length - 1].end_ms;
   if (info.durationSec && lastMs > info.durationSec * 1000 + 3000) {
     out.push("The transcript is longer than the video: they probably don't belong together.");
@@ -250,12 +483,13 @@ function pairingProblems(data, info, name, size, fingerprint, rec) {
   return out;
 }
 
-/** Opens a video with its transcript. picked: {file, info, fingerprint} (or a dev URL with
- *  name/size); src: where the transcript came from (ref, repository key, or the picked text). */
-async function openPair(data, picked, { ref, key, text }) {
+/** Opens a video with its transcript. picked: {file, info, fingerprint}, or a URL with name and
+ *  size (a Dropbox stream, or development); src: where the transcript came from (ref, repository
+ *  key, or the picked text; sure: matched by content, see pairingProblems). */
+async function openPair(data, picked, src) {
   const { info, fingerprint } = picked, name = picked.file?.name ?? picked.name, size = picked.file?.size ?? picked.size;
-  const id = data.id || name, rec = await store.load(id);
-  const issues = pairingProblems(data, info, name, size, fingerprint, rec);
+  const rec = await store.load(data.id || name);
+  const issues = pairingProblems(data, info, name, size, fingerprint, rec, src.sure);
   if (issues.length && (issues[0].startsWith("This is a vertical") || issues[0].startsWith("The transcript isn't"))) {
     setProblems(issues);
     $("startBtn").disabled = false;
@@ -265,8 +499,40 @@ async function openPair(data, picked, { ref, key, text }) {
     $("startBtn").disabled = false;
     return;
   }
+  showVideo(picked, rec.position);
+  await useTranscript(data, picked, src, rec);
+}
+
+/** Shows the player with this video (subtitles come from useTranscript), resuming at resumeAt s. */
+function showVideo(picked, resumeAt = 0) {
+  const name = picked.file?.name ?? picked.name;
+  stream = null;
+  if (S.videoUrl?.startsWith("blob:")) URL.revokeObjectURL(S.videoUrl);
+  S.videoUrl = picked.file ? URL.createObjectURL(picked.file) : picked.url;
+  Object.assign(S, { picked, videoName: name, swapping: false, playing: false });
+  video.src = S.videoUrl;
+  applyRate(prefs.rate);
+  $("welcome").hidden = true;
+  player.hidden = false;
+  document.title = `${name.replace(/\.[^.]+$/, "")} · Lecture Karaoke`;
+  updateChips();
+  layout();
+  resize();
+  video.addEventListener("loadedmetadata", () => {
+    if (resumeAt > 5 && resumeAt < video.duration - 10) {
+      video.currentTime = resumeAt;
+      toast(`Resumed at ${clock(resumeAt)}`, "Start over", () => (video.currentTime = 0));
+    }
+  }, { once: true });
+}
+
+/** Subtitles for the video on screen from this transcript (rec: its record on this device). Also
+ *  used when a transcript arrives while the video plays: playback is left as it is. */
+async function useTranscript(data, picked, { ref, key, text }, rec) {
+  const { info, fingerprint } = picked, name = picked.file?.name ?? picked.name, size = picked.file?.size ?? picked.size;
+  const id = data.id || name;
   Object.assign(S, {
-    transcript: data, id, rec, videoName: name, picked, repoKey: key ?? rec.repoKey ?? null,
+    transcript: data, id, rec, repoKey: key ?? rec.repoKey ?? null,
     durationMs: Math.round(info.durationSec * 1000),
     // Soniox counts from the first audio sample; Safari and Chromium keep the MP4's leading empty
     // edit (the audio starts that much into the timeline), Firefox drops it.
@@ -276,54 +542,47 @@ async function openPair(data, picked, { ref, key, text }) {
   });
   Object.assign(rec, {
     video: { name, size, fingerprint }, title: name.replace(/\.[^.]+$/, ""), durationSec: info.durationSec,
-    lastOpened: Date.now(), hidden: false, repoKey: S.repoKey, transcriptRef: ref || `local:${id}`,
+    lastOpened: Date.now(), hidden: false, repoKey: S.repoKey, transcriptRef: ref || `local:${id}`, dropbox: picked.dropbox ?? null,
   });
   if (!ref) await store.putFile(`local:${id}`, { text: text ?? JSON.stringify(data) });
   S.baseWords = wordsFromTranscript(data);
   S.words = applyFixes(S.baseWords, rec.fixes);
   await prepareFont([...new Set(S.words.map((w) => w.text).join(""))].join(""));
   rebuildLayout();
-  if (S.videoUrl?.startsWith("blob:")) URL.revokeObjectURL(S.videoUrl);
-  S.videoUrl = picked.file ? URL.createObjectURL(picked.file) : picked.url;
-  video.src = S.videoUrl;
-  applyRate(prefs.rate);
-  $("welcome").hidden = true;
-  player.hidden = false;
-  document.title = `${rec.title} · Lecture Karaoke`;
   updateChips();
-  layout();
-  resize();
-  video.addEventListener("loadedmetadata", () => {
-    if (rec.position > 5 && rec.position < video.duration - 10) {
-      video.currentTime = rec.position;
-      toast(`Resumed at ${clock(rec.position)}`, "Start over", () => (video.currentTime = 0));
-    }
-  }, { once: true });
+  renderGet();
   save();
   if (gh) linkToRepo();
+}
+
+/** Plays a video that has no transcript yet; the subtitle area says what is happening, and the
+ *  subtitles come when the transcript does. */
+function openWaiting(picked) {
+  showVideo(picked);
+  Object.assign(S, { transcript: null, id: null, rec: {}, repoKey: null, baseWords: [], words: [], pieces: [], events: [],
+    durationMs: Math.round(picked.info.durationSec * 1000), audioOffsetMs: isFirefox ? 0 : Math.round(picked.info.audioStartSec * 1000),
+    shown: -2, lastSecond: -1 });
+  draw(-1);
+  renderGet();
 }
 
 /** Ties the open lecture to its place in the repository: syncs its fixes, or first puts a
  *  transcript picked on this device there, for the other devices. */
 async function linkToRepo() {
-  const id = S.id, rec = S.rec, { info, fingerprint } = S.picked, name = S.videoName, data = S.transcript;
+  const id = S.id, rec = S.rec, picked = S.picked, { info, fingerprint } = picked, name = S.videoName, data = S.transcript;
   try {
     if (!S.repoKey) {
       const index = await repoIndex();
       let entry = (index.videos || []).find((v) => v.fingerprint === fingerprint);
-      if (!entry) {
-        const stem = name.replace(/\.[^.]+$/, "");
-        const key = (index.videos || []).some((v) => v.key === stem) ? `${stem} (${fingerprint.slice(4, 12)})` : stem;
-        const path = `transcripts/${key}.json`;
-        const size = S.picked.file?.size ?? S.picked.size;
-        const text = JSON.stringify({ ...data, video: name, video_size: size, video_fingerprint: fingerprint,
+      if (!entry?.transcript) {   // not there, or still waiting for the job: this transcript is it
+        const key = entry?.key ?? keyFor(name, fingerprint, index.videos), path = `transcripts/${key}.json`;
+        const text = JSON.stringify({ ...data, video: name, video_size: picked.file?.size ?? picked.size, video_fingerprint: fingerprint,
           duration_ms: Math.round(info.durationSec * 1000) });
         if (!(await gh.write(path, text, null, `Add ${name} from the app`))) throw new Error(`${path} already exists on GitHub`);
-        entry = { key, name, size, fingerprint, duration_ms: Math.round(info.durationSec * 1000), transcript: path,
-          id: data.id ?? null, words: S.baseWords.length, updated: new Date().toISOString() };
-        await gh.update("index.json", (cur) => ({ version: 1, ...cur, videos: [...(cur?.videos || [])
-          .filter((v) => v.fingerprint !== fingerprint), entry].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)) }),
-        `Index ${name}`);
+        const copy = picked.dropbox ?? (W?.picked === picked && W.online ? W.online : entry?.dropbox ?? null);
+        entry = indexEntry({ ...videoFields(picked), key, folder: copy ? folderOf(copy.path) : "", dropbox: copy, staged: null, skip_ms: 0,
+          transcript: path, status: "ready", error: null, id: data.id ?? null, words: S.baseWords.length, updated: isoNow() });
+        await gh.update("index.json", (cur) => withEntry(cur, entry), `Index ${name}`);
         await store.putFile(`gh:${gh.repo}:${path}`, { text });
         toast("Transcript saved to GitHub for your other devices");
       }
@@ -338,6 +597,331 @@ async function linkToRepo() {
   }
 }
 
+// ---------------------------------------------------------------- getting a transcript
+// A video picked on this device is looked up in Dropbox: a file of the same size, confirmed by its
+// content hash. With a transcript it plays, and if it isn't in Dropbox it can be put there for the
+// other devices. In Dropbox without a transcript, the job can transcribe it there. In neither, it
+// can be uploaded to Dropbox (way B), or just its audio sent to the staging folder (way C). Either
+// way the index gets a pending entry and the job is started at once (its scheduled runs would find
+// the entry too). The video plays meanwhile; the index is checked every 20 s, and the subtitles
+// appear when the transcript does.
+let W = null;          // the video looked after: {picked, entry, online, checking, error, note, resume, welcome}
+let transfer = null;   // the upload running (one at a time): {w, label, done, total, abort}
+const uploads = { get: store.getFile, put: store.putFile, delete: store.deleteFile };   // unfinished uploads, kept by fingerprint
+const el = (tag, props, ...children) => { const e = Object.assign(document.createElement(tag), props); e.append(...children); return e; };
+const pct = (done, total) => `${total ? Math.floor((done / total) * 100) : 0}%`;
+
+/** Starts looking after a video just opened or picked: whether it is in Dropbox, its unfinished
+ *  uploads, and its index entry while it is being transcribed. w.online: {path, hash}; false;
+ *  null when that can't be told (offline); undefined until known. */
+async function trackVideo(picked, entry, { welcome = false } = {}) {
+  if (!gh || !dbx) return;
+  const w = W = { picked, entry: entry ?? null, online: picked.dropbox ?? undefined, checking: "", error: "", note: "", resume: {}, welcome };
+  await loadResume(w);
+  if (W !== w) return;
+  if (entryStatus(w.entry) === "pending") startPolling();
+  if (w.online === undefined) await checkDropbox(w);
+  if (W !== w) return;
+  renderGet();
+  if (!welcome && S.transcript && S.picked === picked && w.online === false && picked.file) {
+    toast("This video isn't in Dropbox: upload it to stream it on your other devices.", "Upload", () => askUpload(w));
+  }
+}
+async function loadResume(w) {
+  for (const kind of ["video", "audio"]) w.resume[kind] = await store.getFile(`upload:${w.picked.fingerprint}:${kind}`);
+}
+
+/** Looks for the video in Dropbox: files of the same size (the same name first) must also have
+ *  its content hash, computed from the file once and kept. */
+async function checkDropbox(w) {
+  const { picked } = w, size = picked.file?.size ?? picked.size, name = picked.file?.name ?? picked.name;
+  w.checking = "Looking in Dropbox…";
+  renderGet();
+  try {
+    const { files, offline } = await dropboxFiles();
+    const same = files.filter((f) => f.size === size && VIDEO_FILE.test(f.name) && !f.path_lower.startsWith(STAGING))
+      .sort((a, b) => (b.name === name) - (a.name === name));
+    let found = (w.entry?.dropbox?.hash && same.find((f) => f.content_hash === w.entry.dropbox.hash)) || null;
+    if (!found && same.length && picked.file) {
+      const hash = await localHash(w);
+      found = same.find((f) => f.content_hash === hash) || null;
+    }
+    w.online = found ? { path: found.path_display, hash: found.content_hash } : offline || (same.length && !picked.file) ? null : false;
+  } catch (err) {
+    w.online = null;
+    if (err.kind !== "offline") w.error = err.message;
+  }
+  w.checking = "";
+}
+/** The video file's Dropbox content hash: it reads the whole file, once (kept by fingerprint). */
+async function localHash(w) {
+  const file = w.picked.file, key = `hash:${w.picked.fingerprint}`, kept = await store.getFile(key);
+  if (kept?.hash && kept.size === file.size) return kept.hash;
+  const hash = await contentHash(blobReader(file), file.size, { onProgress: (done, total) => {
+    w.checking = `Comparing with the copy in Dropbox… ${pct(done, total)}`;
+    drawLive();
+  } });
+  await store.putFile(key, { hash, size: file.size });
+  return hash;
+}
+
+/** The index fields that describe the video itself. */
+function videoFields(picked) {
+  const { info, fingerprint } = picked;
+  return { name: picked.file?.name ?? picked.name, size: picked.file?.size ?? picked.size, fingerprint,
+    duration_ms: Math.round(info.durationSec * 1000), audio_start_ms: Math.round(info.audioStartSec * 1000), width: info.width, height: info.height };
+}
+
+/** Runs an action for the video; from the start screen the video opens first, to watch meanwhile. */
+function startAction(w, action) {
+  if (player.hidden && S.picked === w.picked) {
+    w.welcome = false;
+    openWaiting(w.picked);
+  }
+  action(w).catch((err) => { w.error = err.message; renderGet(); });
+}
+
+/** Puts the video in the index as waiting for its transcript (unless it has one by now) and starts
+ *  the job for it; if the job can't be started from here, its next scheduled run finds the entry. */
+async function startJob(w, fields) {
+  let entry = null;
+  await gh.update("index.json", (cur) => {
+    const videos = cur?.videos || [], had = videos.find((v) => v.fingerprint === fields.fingerprint);
+    if (had?.transcript) { entry = had; return undefined; }
+    entry = indexEntry({ ...fields, key: keyFor(fields.name, fields.fingerprint, videos), transcript: null,
+      status: "pending", error: null, id: null, words: null, updated: isoNow() });
+    return withEntry(cur, entry);
+  }, `Transcribe ${fields.name}`);
+  Object.assign(w, { entry, note: "", error: "" });
+  if (entry.transcript) return transcriptArrived(w);
+  try {
+    await gh.dispatch(entry.key);
+  } catch (err) {
+    w.note = `${err.message} Its next scheduled run will transcribe it.`;
+  }
+  startPolling();
+  renderGet();
+  loadLibrary();
+}
+
+/** In Dropbox without a transcript: the job transcribes it from there. */
+const transcribeInDropbox = (w) => startJob(w, { ...videoFields(w.picked), folder: folderOf(w.online.path), dropbox: w.online, staged: null, skip_ms: 0 });
+
+/** Way B: the video goes to Dropbox, in a course folder; the job transcribes it there, and the other
+ *  devices can stream it. An interrupted upload continues where it stopped (same path). */
+async function uploadVideo(w, folder) {
+  const { picked } = w, file = picked.file;
+  const path = w.resume.video?.path ?? `/${folder ? `${folder}/` : ""}${file.name}`;
+  await transferFor(w, "Uploading to Dropbox", async (signal, progress) => {
+    const { metadata, hash } = await dbx.upload({ size: file.size, read: blobReader(file) }, path,
+      { key: `upload:${picked.fingerprint}:video`, saved: uploads, onProgress: progress, signal });
+    await store.putFile(`hash:${picked.fingerprint}`, { hash, size: file.size });
+    w.online = { path: metadata.path_display, hash };
+    const status = entryStatus(w.entry);
+    if (status === "ready" || status === "pending" || (S.picked === picked && S.transcript)) {
+      await placeInIndex(w);   // it has (or is getting) its transcript: the index learns where the video is
+      toast(`Uploaded to Dropbox: ${metadata.path_display}`);
+    } else {
+      await startJob(w, { ...videoFields(picked), folder: folderOf(metadata.path_display), dropbox: w.online, staged: null, skip_ms: 0 });
+    }
+  });
+}
+/** Notes in the video's index entry where it is in Dropbox (without an entry, linkToRepo adds one with it). */
+async function placeInIndex(w) {
+  const fp = w.picked.fingerprint, { path, hash } = w.online;
+  await gh.update("index.json", (cur) => {
+    const e = (cur?.videos || []).find((v) => v.fingerprint === fp);
+    if (!e || (e.dropbox?.hash === hash && e.dropbox?.path === path)) return undefined;
+    return withEntry(cur, (w.entry = changedEntry(e, { folder: folderOf(path), dropbox: { path, hash }, updated: isoNow() })));
+  }, `${videoFields(w.picked).name} is in Dropbox`);
+  loadLibrary();
+}
+
+/** Way C: only the audio goes to Dropbox, copied out of the video (about 1 MB a minute), into the
+ *  staging folder that the job empties; the video stays on this device. */
+async function transcribeOnly(w) {
+  const { picked } = w, file = picked.file, staged = `${STAGING}${picked.fingerprint}.aac`;
+  await transferFor(w, "Copying the audio", async (signal, progress) => {
+    const { blob, skipMs } = await extractAdts(blobReader(file), picked.info,
+      { signal, onProgress: (done, total) => progress(done, total, "Copying the audio") });
+    await dbx.upload({ size: blob.size, read: blobReader(blob) }, staged, { key: `upload:${picked.fingerprint}:audio`, saved: uploads,
+      mode: "overwrite", signal, onProgress: (done, total) => progress(done, total, "Sending the audio") });
+    await startJob(w, { ...videoFields(picked), folder: "", dropbox: null, staged, skip_ms: skipMs });
+  });
+}
+
+// While a transfer runs, the browser asks before the page is closed.
+const leaving = (e) => { e.preventDefault(); e.returnValue = ""; };
+async function transferFor(w, label, work) {
+  if (transfer) throw new Error("Another upload is running; wait for it to finish.");
+  const t = transfer = { w, label, done: 0, total: 0, abort: new AbortController() };
+  addEventListener("beforeunload", leaving);
+  w.error = "";
+  renderGet();
+  try {
+    await work(t.abort.signal, (done, total, now = t.label) => { Object.assign(t, { done, total, label: now }); drawLive(); });
+  } catch (err) {
+    if (!t.abort.signal.aborted) throw err;   // stopped: the next try continues where it was
+  } finally {
+    transfer = null;
+    removeEventListener("beforeunload", leaving);
+    await loadResume(w);
+    renderGet();
+  }
+}
+
+// The index is read every 20 s while the video waits for its transcript.
+let pollTimer = 0;
+function startPolling() {
+  clearInterval(pollTimer);
+  pollTimer = setInterval(() => { if (W) pollTranscript(W); }, POLL_MS);
+}
+function stopPolling() {
+  clearInterval(pollTimer);
+  pollTimer = 0;
+}
+async function pollTranscript(w) {
+  if (w.polling) return;
+  w.polling = true;
+  try {
+    const entry = ((await repoIndex()).videos || []).find((v) => v.fingerprint === w.picked.fingerprint) || null;
+    if (W !== w) return;
+    const before = entryStatus(w.entry);
+    w.entry = entry;
+    const now = entryStatus(entry);
+    if (now !== "pending") stopPolling();
+    if (now === "ready") await transcriptArrived(w);
+    else if (now !== before) renderGet();
+  } catch { /* offline, or GitHub busy: next time */ } finally {
+    w.polling = false;
+  }
+}
+/** The job made the transcript: the subtitles appear while the video plays on (on the start
+ *  screen, the box offers to play it). */
+async function transcriptArrived(w) {
+  const { entry, picked } = w, ref = `gh:${gh.repo}:${entry.transcript}`;
+  if (!player.hidden && S.picked === picked && !S.transcript) {
+    const text = await transcriptFile(ref);
+    if (!text || W !== w || S.picked !== picked || S.transcript) return;
+    const data = JSON.parse(text);
+    await useTranscript(data, picked, { ref, key: entry.key }, await store.load(data.id || videoFields(picked).name));
+    toast("The subtitles are ready");
+  }
+  renderGet();
+}
+/** From the start screen, once the transcript is there. */
+async function openReady(w) {
+  const ref = `gh:${gh.repo}:${w.entry.transcript}`, text = await transcriptFile(ref);
+  if (!text) return toast("Its transcript can't be downloaded right now.");
+  await openPair(JSON.parse(text), w.picked, { ref, key: w.entry.key, sure: true });
+}
+
+// Way B asks for the course folder (the last one used is offered, and the folders in Dropbox).
+let uploadFor = null;
+function askUpload(w) {
+  if (w.resume.video) return startAction(w, (x) => uploadVideo(x, null));   // continues to the same place
+  const { name, size } = videoFields(w.picked);
+  $("uploadWhat").textContent = `“${name}” (${mb(size)}) goes to your Dropbox, in Apps/Lecture Karaoke, in this folder:`;
+  $("uploadFolder").value = prefs.uploadFolder;
+  $("uploadFolders").replaceChildren(...[...new Set(library.items.map((i) => i.folder).filter(Boolean))]
+    .map((f) => el("option", { value: f })));
+  uploadFor = w;
+  $("uploadDialog").returnValue = "";
+  $("uploadDialog").showModal();
+}
+/** A folder name as typed, made a Dropbox path inside the app folder: null if it can't be one. */
+function cleanFolder(text) {
+  const parts = text.replaceAll("\\", "/").split("/").map((p) => p.trim()).filter(Boolean);
+  return parts.some((p) => p.startsWith(".") || /[\u0000-\u001f]/.test(p)) ? null : parts.join("/");
+}
+$("uploadCancel").addEventListener("click", () => $("uploadDialog").close("cancel"));
+$("uploadDialog").addEventListener("close", () => {
+  const w = uploadFor;
+  uploadFor = null;
+  if ($("uploadDialog").returnValue !== "upload" || !w) return;
+  const folder = cleanFolder($("uploadFolder").value);
+  if (folder === null) return toast("That folder name can't be used (no names starting with a dot).");
+  prefs.uploadFolder = folder;
+  savePrefs();
+  startAction(w, (x) => uploadVideo(x, folder));
+});
+
+function button(text, onClick, cls = "") {
+  const b = el("button", { type: "button", textContent: text, className: cls });
+  b.addEventListener("click", onClick);
+  return b;
+}
+/** What the box for W says and offers; where: "welcome" (the start screen), "player" (over the
+ *  empty subtitle area) or "settings". */
+function getNodes(w, where) {
+  const shown = !player.hidden && S.picked === w.picked && S.transcript;   // its subtitles are on screen, whatever the index says yet
+  const out = [], status = shown ? "ready" : entryStatus(w.entry), file = w.picked.file, t = transfer?.w === w ? transfer : null;
+  const said = (text, cls = "") => text && out.push(el("p", { textContent: text, className: cls }));
+  const actions = (...buttons) => out.push(el("div", { className: "get-actions" }, ...buttons.filter(Boolean)));
+  const resumed = (kind, label) => (w.resume[kind] ? `${label} · ${pct(w.resume[kind].offset, w.resume[kind].size)}` : null);
+  if (t) {
+    out.push(el("p", { className: "live-xfer" }), el("progress", { className: "live-bar" }));
+    actions(button("Stop", () => t.abort.abort()));
+    if (where !== "settings") said("Keep this page open until it's done. If it stops, it continues from where it was.", "small");
+  }
+  if (w.checking) out.push(el("p", { className: "live-checking" }));
+  if (w.error) said(w.error, "get-error");
+  if (status === "ready") {
+    if (where === "welcome") { said("Its transcript is ready."); actions(button("Play", () => openReady(w), "primary")); }
+    else if (w.online) { if (where === "settings") said(`In Dropbox: ${w.online.path}`, "small"); }
+    else if (w.online === false && file && !t) {
+      said("This video isn't in Dropbox: upload it to stream it on your other devices.", "small");
+      actions(button(resumed("video", "Resume upload") ?? "Upload to Dropbox", () => askUpload(w)));
+    }
+  } else if (status === "pending" && !t) {
+    said(w.entry.staged && !w.entry.dropbox ? "Its audio is being transcribed on GitHub." : "Being transcribed on GitHub.");
+    said(where === "settings" ? "" : where === "welcome" ? "Play it meanwhile: the subtitles appear when it's done, usually a few minutes after the job starts."
+      : "The subtitles appear here when it's done, usually a few minutes after the job starts.", "small");
+    if (w.note) said(w.note, "small");
+  } else if (!t) {
+    if (status === "failed") said(`The transcription failed${w.entry.error ? `: ${w.entry.error}` : "."}`, "get-error");
+    if (w.online) {
+      said(w.picked.dropbox ? "It has no transcript yet." : `It's in Dropbox (${w.online.path}) but has no transcript yet.`);
+      actions(button(status === "failed" ? "Try again" : "Transcribe", () => startAction(w, transcribeInDropbox), "primary"));
+    } else if (w.online === false && file) {
+      said("It has no transcript yet. Upload to Dropbox: it is transcribed there, and your other devices can stream it. " +
+        "Transcribe only: just its audio is sent, about 1 MB a minute; the video stays on this device.");
+      actions(button(resumed("video", "Resume upload") ?? "Upload to Dropbox", () => askUpload(w), "primary"),
+        button(resumed("audio", "Transcribe only") ?? "Transcribe only", () => startAction(w, transcribeOnly)));
+    } else if (w.online === null) {
+      said("Dropbox can't be reached right now, so this video can't be transcribed yet.");
+      actions(button("Try again", async () => { w.error = ""; await checkDropbox(w); renderGet(); }));
+    }
+  }
+  if (where === "welcome" && status !== "ready") actions(button("Play without subtitles", () => { w.welcome = false; openWaiting(w.picked); }));
+  return out;
+}
+
+/** Draws W's box wherever it shows: the start screen, the empty subtitle area, and settings. */
+function renderGet() {
+  const w = W, mine = !!w && S.picked === w.picked;
+  const welcome = mine && w.welcome && player.hidden, waiting = !player.hidden && !S.transcript, set = mine && !player.hidden && !!S.transcript;
+  $("getBox").hidden = !welcome;
+  $("getBox").replaceChildren(...(welcome ? getNodes(w, "welcome") : []));
+  $("waitBox").hidden = !waiting;
+  $("waitBox").replaceChildren(...(!waiting ? [] : mine ? getNodes(w, "player") : [el("p", { textContent: "No transcript for this video yet." })]));
+  $("dbxSet").hidden = !set;
+  $("dbxBox").replaceChildren(...(set ? getNodes(w, "settings") : []));
+  drawLive();
+}
+/** The parts that change while work runs, updated in place (the buttons beside them stay put
+ *  under a finger); and the line at the top when no box on screen shows the transfer. */
+function drawLive() {
+  const t = transfer, text = t ? `${t.label}… ${pct(t.done, t.total)}${t.total ? ` of ${mb(t.total)}` : ""}` : "";
+  for (const p of document.querySelectorAll(".live-xfer")) p.textContent = text;
+  for (const b of document.querySelectorAll(".live-bar")) Object.assign(b, { max: t?.total || 1, value: t?.done || 0 });
+  for (const p of document.querySelectorAll(".live-checking")) p.textContent = W?.checking || "";
+  const shown = [...document.querySelectorAll(".live-bar")].some((b) => b.getClientRects().length);
+  $("transferLine").hidden = !t || shown;
+  $("transferText").textContent = text;
+}
+$("transferStop").addEventListener("click", () => transfer?.abort.abort());
+
 // ---------------------------------------------------------------- recent lectures
 async function drawRecent() {
   const recs = (await store.list()).filter((r) => r.lastOpened && r.video && !r.hidden)
@@ -348,9 +932,16 @@ async function drawRecent() {
     const open = Object.assign(document.createElement("button"), { type: "button", className: "recent-open" });
     open.append(Object.assign(document.createElement("span"), { className: "recent-title", textContent: r.title || r.video.name }),
       Object.assign(document.createElement("span"), { className: "recent-meta",
-        textContent: `${clock(r.position || 0)} of ${clock(r.durationSec)} · ${ago(r.lastOpened)}` }));
-    // Safari can't reopen a file by itself: the tap opens the picker (its Recents has the video).
-    open.addEventListener("click", () => {
+        textContent: `${clock(r.position || 0)} of ${clock(r.durationSec)} · ${ago(r.lastOpened)}${r.dropbox ? " · Dropbox" : ""}` }));
+    // A video streamed from Dropbox streams again. Safari can't reopen a file by itself: the tap
+    // opens the picker (its Recents has the video).
+    open.addEventListener("click", async () => {
+      if (r.dropbox && (await dbxReady)) {
+        if (!library.items.length) await loadLibrary();
+        const it = library.items.find((i) => i.hash === r.dropbox.hash)
+          || library.items.find((i) => i.path.toLowerCase() === r.dropbox.path.toLowerCase());
+        if (it) return openFromDropbox(it);
+      }
       S.wanted = r;
       setStep("video", `Pick “${r.video.name}”`, false);
       $("pickVideo").click();
@@ -479,10 +1070,10 @@ function draw(e) {
   next.replaceChildren(...p.after.map((l) => lineEl(l.idx.map((i, k) => [i, l.texts[k]]))));
 }
 function render() {
-  if (!S.events.length) return;
+  if (S.swapping) return;   // a renewed Dropbox link loads from 0 until it is back at the position
   const t = video.currentTime * 1000;
-  const e = activeEvent(S.events, t);
-  if (e !== S.shown) { draw(e); S.shown = e; S.spoken = -1; }
+  const e = S.events.length ? activeEvent(S.events, t) : -1;
+  if (S.events.length && e !== S.shown) { draw(e); S.shown = e; S.spoken = -1; }
   if (e >= 0) {
     const n = spokenCount(S.events[e], t);
     if (n !== S.spoken) {
@@ -517,8 +1108,14 @@ video.textTracks.addEventListener?.("addtrack", captionsOff);
 // ---------------------------------------------------------------- controls
 const togglePlay = () => (video.paused ? video.play().catch(() => {}) : video.pause());
 $("playBtn").addEventListener("click", togglePlay);
-video.addEventListener("play", () => { $("playBtn").textContent = "❚❚"; $("playBtn").ariaLabel = "Pause"; keepAwake(true); });
-video.addEventListener("pause", () => { $("playBtn").textContent = "▶︎"; $("playBtn").ariaLabel = "Play"; keepAwake(false); save(); });
+video.addEventListener("play", () => { S.playing = true; $("playBtn").textContent = "❚❚"; $("playBtn").ariaLabel = "Pause"; keepAwake(true); });
+video.addEventListener("pause", () => {
+  if (!S.swapping) S.playing = false;
+  $("playBtn").textContent = "▶︎";
+  $("playBtn").ariaLabel = "Play";
+  keepAwake(false);
+  save();
+});
 video.addEventListener("click", togglePlay);
 $("seek").addEventListener("input", () => { if (video.duration) video.currentTime = ($("seek").value / 1000) * video.duration; });
 $("editBtn").addEventListener("click", () => setEditing(!S.editing));
@@ -860,7 +1457,9 @@ function openSettings() {
     S.audioOffsetMs ? `This file's audio starts ${S.audioOffsetMs} ms in; that is already allowed for.` : "";
   drawFixList();
   $("settings").showModal();
+  renderGet();
 }
+$("settings").addEventListener("close", drawLive);
 function syncSplitControls() {
   const o = orient(), [lo, hi] = SPLIT_RANGE[o], share = videoShare();
   Object.assign($("split"), { min: lo * 100, max: hi * 100 });
@@ -878,7 +1477,7 @@ $("sync").addEventListener("input", () => {
   rebuildEvents();
 });
 $("sync").addEventListener("change", save);
-$("language").addEventListener("change", () => { S.language = $("language").value; rebuildLayout(); save(); });
+$("language").addEventListener("change", () => { S.language = $("language").value; if (S.transcript) { rebuildLayout(); save(); } });
 function goHome() {
   if ($("settings").open) $("settings").close();
   if (arranging) setArranging(false);
@@ -892,6 +1491,11 @@ function goHome() {
   setStep("json", "Choose its .json file", false);
   updateStart();
   drawRecent();
+  W = null;   // a transfer still running carries on (the line at the top shows it)
+  stream = null;
+  stopPolling();
+  renderGet();
+  loadLibrary();
 }
 $("openOther").addEventListener("click", goHome);
 $("arrangeBtn").addEventListener("click", () => { $("settings").close(); setArranging(true); });
@@ -933,7 +1537,7 @@ $("ghDialog").querySelector("form").addEventListener("submit", async (e) => {
     connect({ repo, token });
     $("ghDialog").close();
     toast(`Connected to ${repo}: ${count} transcript${count === 1 ? "" : "s"}` + (info.private ? "" : ". Warning: this repository is public!"));
-    if (!player.hidden) linkToRepo();
+    if (!player.hidden && S.transcript) linkToRepo();
   } catch (err) {
     $("ghStatus").textContent = err.message;
   }
@@ -954,6 +1558,7 @@ function drawFixList() {
   }) : [Object.assign(document.createElement("li"), { textContent: "No fixes yet: turn on Fix and tap a word." })]));
 }
 $("exportBtn").addEventListener("click", async () => {
+  if (!S.transcript) return toast("There is no transcript yet.");
   const base = S.videoName.replace(/\.[^.]+$/, "");
   const files = [
     new File([JSON.stringify(exportTranscript(S.transcript, S.words, S.rec.fixes || [], S.videoName))],
@@ -1039,8 +1644,17 @@ $("reloadBtn").addEventListener("click", () => location.reload());
 
 // Development only (localhost): ?video=URL&json=URL opens files served by dev/serve.mjs.
 if (dev) {
-  window.__lk = { S, video, prefs, store, activeEvent, spokenCount, syncFixes, get gh() { return gh; } };   // for checks
+  window.__lk = { S, video, prefs, store, activeEvent, spokenCount, syncFixes, library, pickedVideo, openFromDropbox, renewStream,
+    loadLibrary, pollTranscript, get gh() { return gh; }, get dbx() { return dbx; }, get W() { return W; }, get stream() { return stream; },
+    get transfer() { return transfer; } };   // for checks
   const q = new URLSearchParams(location.search);
+  // ?pick=URL: as if that file had been picked on this device
+  if (q.get("pick")) {
+    (async () => {
+      const url = q.get("pick"), blob = await (await fetch(url)).blob();
+      pickedVideo(new File([blob], decodeURIComponent(url.split("/").pop()), { type: "video/mp4" }));
+    })().catch((err) => setProblems([`Dev pick failed: ${err.message}`]));
+  }
   if (q.get("video") && q.get("json")) {
     (async () => {
       const vurl = q.get("video");

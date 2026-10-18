@@ -3,7 +3,9 @@
 //   transcripts: per transcript id: position, sync, language, fixes and the ones not yet on
 //                GitHub, the paired video (name, size, fingerprint), title, last opened
 //   files:       copies of transcripts (from GitHub with their ETag, or picked on this device),
-//                so a lecture reopens offline and without re-downloading
+//                so a lecture reopens offline and without re-downloading; also, by key prefix,
+//                the Dropbox listing and its cursor ("dropbox:"), content hashes of local videos
+//                ("hash:<fingerprint>") and unfinished uploads ("upload:<fingerprint>:<kind>")
 const DB_NAME = "lecture-karaoke", RECORDS = "transcripts", FILES = "files";
 let dbPromise = null;
 
@@ -47,3 +49,4 @@ export async function list() {
 }
 export const getFile = (key) => run(FILES, "readonly", (s) => s.get(key), null);
 export const putFile = (key, value) => run(FILES, "readwrite", (s) => s.put(value, key));
+export const deleteFile = (key) => run(FILES, "readwrite", (s) => s.delete(key));
