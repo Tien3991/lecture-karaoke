@@ -38,7 +38,7 @@ button added in a later release appears where the default bar has it.
 | `‹` | back to the start screen |
 | `−5s` / `+5s` | back / forward 5 seconds |
 | `▶︎` | play / pause (tapping the video does too) |
-| `1×` | playback speed, 0.2× to 4×: type a value, pick a preset, or use the slider |
+| `1×` | playback speed, 0.2× to 4×: − and + change it by 0.05×, or type a value, or pick a preset |
 | `Exact` / `+3 s` | switch between exact timing and the offset set in ⋯ Settings (+ before the voice, to read ahead; − after it) |
 | `Soft` | switch the highlight between full color and the soft setting in ⋯ Settings (lit while soft) |
 | lock | lock the screen against touches while the lecture plays: nothing under it reacts, and the bar dims. A touch shows *Slide to unlock*: slide the lock all the way to the right and let go there (stopping short, or wandering off the track, leaves it locked). The keyboard still works; on the slider, → moves it a quarter at a time |

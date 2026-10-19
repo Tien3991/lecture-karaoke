@@ -194,7 +194,7 @@ legend { padding: 0 6px; color: var(--dim); }
 .tx-links { display: flex; flex-wrap: wrap; gap: 6px 22px; margin: 2px 0 4px; }
 .tx-links a { padding: 6px 0; font-weight: 600; }
 input[type=range] { accent-color: var(--hi); }
-#sync, #split, #speedRange, #hiStrength { width: 100%; }
+#sync, #split, #hiStrength { width: 100%; }
 select, #editorText { width: 100%; padding: 10px; border-radius: 10px; border: 1px solid var(--line); background: #000; }
 #editorText { font: 700 22px "LK Sans", sans-serif; }
 .small { color: var(--dim); font-size: 13px; margin: 6px 0 0; }
@@ -210,7 +210,8 @@ select, #editorText { width: 100%; padding: 10px; border-radius: 10px; border: 1
 .range-ends span { position: absolute; top: 0; }
 .range-ends span:first-child { left: -10px; }
 .range-ends span:last-child { right: -10px; }
-.range-ends .one { left: 53.7%; transform: translateX(-50%); }   /* 1× on the logarithmic slider */
+.speed-step { margin: 0 0 12px; }
+.speed-step button { min-width: 56px; padding: 10px 12px; }
 /* the highlight: color swatches (the last one opens a color picker), then full color and soft, each with a sample */
 .swatches { display: grid; grid-template-columns: repeat(7, minmax(24px, 34px)); gap: 10px; margin: 2px 0 12px; }   /* one row, even on a phone */
 .swatch { position: relative; aspect-ratio: 1; cursor: pointer; }

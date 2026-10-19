@@ -17,7 +17,7 @@ import { HIDDEN_FILE, STAGING, changedEntry, entryStatus, folderLanguage, folder
 import { applyDeltas, deltaFor, sameFixes } from "./core/sync.js";
 import * as store from "./core/store.js";
 
-const VERSION = "2.6.0";
+const VERSION = "2.7.0";
 // Proportions of the burned vertical video (identical in every pipeline calibration), in em of
 // the main subtitle text: line limit, frame width, and the height the three blocks need.
 const FIT_EM = 892.4 / 67.797, FRAME_EM = 1080 / 67.797, PANEL_EM = 14.4, CTX_SCALE = 74 / 93;
@@ -1756,26 +1756,27 @@ function applyRate(r) {
   savePrefs();
   return true;
 }
-// The slider is logarithmic, so it is as fine around 1× as at the ends; it snaps to 0.05.
-const SLIDER_STEPS = 1000;
-const toSlider = (r) => Math.round((Math.log(r / RATE_MIN) / Math.log(RATE_MAX / RATE_MIN)) * SLIDER_STEPS);
-const fromSlider = (v) => Math.round(RATE_MIN * (RATE_MAX / RATE_MIN) ** (v / SLIDER_STEPS) * 20) / 20;
+// − and + step 0.05× (from a typed speed between two steps, to the nearer step that way); the arrow
+// keys in the dialog do the same, and Page Up/Down jump to the next preset.
 $("speedPreset").append(new Option("Custom", ""), ...RATE_PRESETS.map((r) => new Option(fmtRate(r), String(r))));
-let sliding = false;   // while a finger or mouse drags the slider, don't move its thumb under it
+function nudgeRate(dir) {
+  const k = video.playbackRate * 20;   // in 0.05× steps
+  applyRate((dir > 0 ? Math.floor(k + 1e-6) + 1 : Math.ceil(k - 1e-6) - 1) / 20);
+}
 function syncSpeedControls() {
   const r = video.playbackRate;
-  if (document.activeElement !== $("speedNum")) $("speedNum").value = +r.toFixed(2);
-  if (!sliding) $("speedRange").value = toSlider(r);
+  if (document.activeElement !== $("speedNum")) $("speedNum").value = r.toFixed(2);
   $("speedPreset").value = RATE_PRESETS.includes(r) ? String(r) : "";
+  $("speedDown").disabled = r <= RATE_MIN + 1e-9;
+  $("speedUp").disabled = r >= RATE_MAX - 1e-9;
 }
-$("speedRange").addEventListener("pointerdown", () => (sliding = true));
-for (const ev of ["pointerup", "pointercancel"]) addEventListener(ev, () => { if (sliding) { sliding = false; syncSpeedControls(); } });
 $("speedBtn").addEventListener("click", () => { syncSpeedControls(); $("speedDialog").showModal(); });
-$("speedRange").addEventListener("input", () => applyRate(fromSlider(Number($("speedRange").value))));
-// Keyboard on the slider: arrows step 0.05×, Page Up/Down jump to the next preset.
-$("speedRange").addEventListener("keydown", (e) => {
-  const step = { ArrowRight: 0.05, ArrowUp: 0.05, ArrowLeft: -0.05, ArrowDown: -0.05 }[e.key];
-  if (step) applyRate(video.playbackRate + step);
+$("speedDown").addEventListener("click", () => nudgeRate(-1));
+$("speedUp").addEventListener("click", () => nudgeRate(1));
+$("speedDialog").addEventListener("keydown", (e) => {
+  if (e.target === $("speedNum") || e.target === $("speedPreset")) return;   // they use the arrows themselves
+  const dir = { ArrowRight: 1, ArrowUp: 1, ArrowLeft: -1, ArrowDown: -1 }[e.key];
+  if (dir) nudgeRate(dir);
   else if (e.key === "PageUp" || e.key === "PageDown") stepRate(e.key === "PageUp" ? 1 : -1);
   else return;
   e.preventDefault();
@@ -1783,7 +1784,7 @@ $("speedRange").addEventListener("keydown", (e) => {
 $("speedNum").addEventListener("change", () => {
   const r = parseFloat($("speedNum").value);
   if (Number.isFinite(r)) applyRate(r);
-  $("speedNum").value = +video.playbackRate.toFixed(2);
+  $("speedNum").value = video.playbackRate.toFixed(2);
 });
 $("speedPreset").addEventListener("change", () => { if ($("speedPreset").value) applyRate(Number($("speedPreset").value)); });
 $("speedNormal").addEventListener("click", () => applyRate(1));
