@@ -43,7 +43,7 @@ button added in a later release appears where the default bar has it.
 | `Soft` | switch the highlight between full color and the soft setting in ⋯ Settings (lit while soft) |
 | lock | lock the screen against touches while the lecture plays: nothing under it reacts, and the bar dims. A touch shows *Slide to unlock*: slide the lock all the way to the right and let go there (stopping short, or wandering off the track, leaves it locked). The keyboard still works; on the slider, → moves it a quarter at a time |
 | `Fix` | tap a word to correct it (synced through GitHub when connected) |
-| `⋯` | settings: timing offset, sync fine-tune (±300 ms), layout, highlight, control bar, GitHub, language, the list of fixes, export |
+| `⋯` | settings: links to the transcript, timing offset, sync fine-tune (±300 ms), layout, highlight, control bar, GitHub, language, the list of fixes, export |
 | `⛶` | full screen, where the browser allows it (not iPhone) |
 | handle between video and subtitles | drag to resize them; portrait and landscape are kept separately (double-click, or ⋯ Settings → Automatic, to reset) |
 | keyboard | space play/pause, ←/→ 5 s, ↑/↓ preset speeds, `L` offset, `H` soft highlight, `E` fix, `F` full screen |
@@ -61,6 +61,11 @@ can stand out when you need it and stay quiet when you don't. A recording's bars
 color. **Export corrected
 transcript** saves a corrected `.json` and a `transcript.txt` in the vertical_video_maker
 correction format.
+
+At the top of Settings, *Transcript* has a link to the lecture's transcript with your word fixes as
+**Plain text** (`<name>.txt`, one sentence per line) and one as **JSON** (`<name>.json`, with the
+word timings). On a phone or tablet a link opens the share sheet (*Save to Files*, *Copy*, other
+apps); on a computer it downloads the file.
 
 ## Dropbox and transcription
 
@@ -82,7 +87,10 @@ folder's files go to the back of the line. The app shows such a folder without i
 ignores it too), and a lecture in a Vietnamese folder starts with Vietnamese line breaks (⋯ →
 Language; a language chosen there stays with that transcript).
 
-*Select* deletes files from Dropbox: tap the files, then **Delete**, and confirm. Dropbox keeps
+*Select* hides files from the list or deletes them from Dropbox: tap the files, then **Hide** or
+**Delete**. A hidden file stays in Dropbox and leaves the list on every device (`hidden.json` in the
+repository); *Undo* in the message puts it back. **Hidden (N)** in the header lists the hidden
+files, where *Select* and **Unhide** show them again. **Delete** asks first. Dropbox keeps
 deleted files for at least 30 days (restore them from *Deleted files* on dropbox.com). Their
 transcripts stay in the repository, so a file put back finds its transcript again, and a deleted
 file leaves the recent list too. A file still being transcribed can be deleted, but that
@@ -140,6 +148,9 @@ Connect once per device (start screen → *Connect GitHub*, or ⋯ Settings): th
 - `fixes/<key>.json` holds word fixes made in the app, `{"fixes": [{start_ms, old, new}]}`. Each
   device sends its changes and merges them with what is there, so fixes from several devices are
   all kept; offline changes wait and sync later. The pipeline applies them when it renders.
+- `hidden.json` holds the files hidden from the library, `{"version": 1, "files": {<Dropbox content
+  hash>: {name, path, hidden}}}`. Known by content, a file moved or renamed in Dropbox stays
+  hidden. The transcription job doesn't read it.
 - Transcripts and the index are kept on the device too, so opened lectures work offline.
 
 A transcript is either the transcript JSON from the Soniox API (`GET

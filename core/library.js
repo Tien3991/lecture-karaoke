@@ -74,6 +74,25 @@ export function groupByFolder(items) {
     .sort((a, b) => (a.folder === "" ? -1 : b.folder === "" ? 1 : byName(a.folder, b.folder)));
 }
 
+// Files hidden from the list (they stay in Dropbox): hidden.json in the repository, shared by the
+// devices: {version: 1, files: {<Dropbox content hash>: {name, path, hidden}}}. Known by content, a
+// file moved or renamed in Dropbox stays hidden. The transcription job doesn't read it.
+export const HIDDEN_FILE = "hidden.json";
+
+/** The content hashes hidden.json hides. */
+export const hiddenHashes = (data) => new Set(Object.keys(data?.files || {}));
+
+/** hidden.json with these items hidden (hide) or shown again, or undefined when nothing changes. */
+export function withHidden(data, items, hide, now = isoNow()) {
+  const files = { ...(data?.files || {}) };
+  let changed = false;
+  for (const it of items) {
+    if (hide && !files[it.hash]) { files[it.hash] = { name: it.name, path: it.path, hidden: now }; changed = true; }
+    else if (!hide && files[it.hash]) { delete files[it.hash]; changed = true; }
+  }
+  return changed ? { ...(data || {}), version: 1, files } : undefined;
+}
+
 /** Items whose name or folder (as shown) has every word of the query (case and accents ignored). */
 export function searchLibrary(items, query) {
   const words = query.split(/\s+/).map(norm).filter(Boolean);

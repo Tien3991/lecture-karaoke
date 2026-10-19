@@ -191,6 +191,8 @@ dialog::backdrop { background: rgba(0, 0, 0, 0.6); }
 dialog h2 { margin: 0 0 10px; font-size: 20px; }
 fieldset { border: 1px solid var(--line); border-radius: 12px; margin: 0 0 12px; padding: 10px 12px; }
 legend { padding: 0 6px; color: var(--dim); }
+.tx-links { display: flex; flex-wrap: wrap; gap: 6px 22px; margin: 2px 0 4px; }
+.tx-links a { padding: 6px 0; font-weight: 600; }
 input[type=range] { accent-color: var(--hi); }
 #sync, #split, #speedRange, #hiStrength { width: 100%; }
 select, #editorText { width: 100%; padding: 10px; border-radius: 10px; border: 1px solid var(--line); background: #000; }

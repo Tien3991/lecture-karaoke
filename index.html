@@ -7,7 +7,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Karaoke">
-<meta name="app-version" content="2.5.0">
+<meta name="app-version" content="2.6.0">
 <meta name="description" content="Plays your lecture videos and audio recordings, from your device or your Dropbox, with live karaoke subtitles from their Soniox transcripts; new ones get transcribed on GitHub.">
 <title>Lecture Karaoke</title>
 <link rel="manifest" href="manifest.webmanifest">
@@ -47,15 +47,18 @@
       <h2>Dropbox</h2>
       <span class="lib-links">
         <button type="button" id="libCheck" class="linkish" title="Start the transcription job now for files added to Dropbox (it also runs on a schedule)">Check now</button>
-        <button type="button" id="libSelect" class="linkish" title="Choose files to delete from Dropbox">Select</button>
+        <button type="button" id="libSelect" class="linkish" title="Choose files to hide from this list or delete from Dropbox">Select</button>
+        <button type="button" id="libHidden" class="linkish" title="The files hidden from this list (they stay in Dropbox)" hidden>Hidden</button>
       </span>
     </div>
     <input type="search" id="libSearch" class="lib-search" placeholder="Search" aria-label="Search the lectures in Dropbox" autocomplete="off" spellcheck="false">
     <p id="libNote" class="small lib-note" role="status"></p>
     <div id="libList" class="lib-list"></div>
-    <!-- Select mode: tapping files chooses them; Delete asks first (app.js deleteChosen). -->
+    <!-- Select mode: tapping files chooses them; Hide (Unhide among the hidden ones) takes them off
+         the list on every device (app.js setHidden); Delete asks first (app.js deleteChosen). -->
     <div id="libPick" class="lib-pick" hidden>
       <span id="libPicked" role="status"></span>
+      <button type="button" id="libHide" disabled>Hide</button>
       <button type="button" id="libDelete" class="danger" disabled>Delete</button>
     </div>
   </section>
@@ -128,6 +131,11 @@
 <dialog id="settings">
   <form method="dialog">
     <h2>Settings</h2>
+    <fieldset id="txSet">
+      <legend>Transcript</legend>
+      <p class="tx-links"><a id="txText" href="#" download>Plain text (.txt)</a><a id="txJson" href="#" download>JSON (.json)</a></p>
+      <p class="small" id="txNote">This lecture's transcript with your word fixes: one sentence per line, or all of it with word timings.</p>
+    </fieldset>
     <fieldset>
       <legend>Subtitle timing</legend>
       <p class="small top">The <b>Exact</b> button switches between exact timing and this offset:</p>

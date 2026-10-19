@@ -12,8 +12,8 @@ import path from "node:path";
 import { createServer } from "../dev/serve.mjs";
 import { BLOCK, CHUNK, ContentHasher, Dropbox, contentHash } from "../core/dropbox.js";
 import { GitHub } from "../core/github.js";
-import { changedEntry, entryStatus, folderLanguage, groupByFolder, indexEntry, keyFor, mergeLibrary, searchLibrary, shownFolder,
-  withEntry } from "../core/library.js";
+import { changedEntry, entryStatus, folderLanguage, groupByFolder, hiddenHashes, indexEntry, keyFor, mergeLibrary, searchLibrary,
+  shownFolder, withEntry, withHidden } from "../core/library.js";
 
 /** Dropbox's content hash computed with node:crypto, to check the browser code against. */
 function reference(buf) {
@@ -281,6 +281,21 @@ test("a folder's language mark: the language of the lectures under it, left out 
   const lib = mergeLibrary([file("/giaitich1___vn/Bài 1.mp4"), file("/CS101/Lecture.mp4")], []);
   assert.deepEqual(searchLibrary(lib, "giaitich1 bai").map((i) => i.name), ["Bài 1.mp4"]);
   assert.deepEqual(searchLibrary(lib, "vn"), [], "the hidden mark isn't searched");
+});
+
+test("hiding: hidden.json knows files by content hash; hiding twice or showing what isn't hidden changes nothing", () => {
+  const a = { name: "A.mp4", path: "/C/A.mp4", hash: "ha" }, b = { name: "B.mp4", path: "/C/B.mp4", hash: "hb" };
+  assert.deepEqual([...hiddenHashes(null)], []);
+  const one = withHidden(null, [a], true, "t1");
+  assert.deepEqual(one, { version: 1, files: { ha: { name: "A.mp4", path: "/C/A.mp4", hidden: "t1" } } });
+  assert.equal(withHidden(one, [a], true, "t2"), undefined, "already hidden");
+  const two = withHidden(one, [a, b], true, "t2");
+  assert.deepEqual(Object.keys(two.files), ["ha", "hb"]);
+  assert.equal(two.files.ha.hidden, "t1", "the first hiding is kept");
+  assert.deepEqual([...hiddenHashes(two)], ["ha", "hb"]);
+  assert.deepEqual(withHidden(two, [a], false), { version: 1, files: { hb: two.files.hb } });
+  assert.equal(withHidden(one, [b], false), undefined, "not hidden");
+  assert.deepEqual(withHidden({ version: 1, files: {}, note: "kept" }, [b], true, "t3").note, "kept");
 });
 
 test("dispatch: starts transcribe.yml on main with the item; a token without Actions access is refused", async () => {

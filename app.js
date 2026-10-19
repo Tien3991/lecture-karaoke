@@ -12,12 +12,12 @@ import { applyFixes, exportTranscript, transcriptText } from "./core/corrections
 import { GitHub } from "./core/github.js";
 import { Dropbox, LINK_MS, contentHash } from "./core/dropbox.js";
 import { extractAdts } from "./core/audio.js";
-import { STAGING, changedEntry, entryStatus, folderLanguage, folderOf, groupByFolder, indexEntry, isoNow, keyFor, mergeLibrary,
-  searchLibrary, shownFolder, withEntry } from "./core/library.js";
+import { HIDDEN_FILE, STAGING, changedEntry, entryStatus, folderLanguage, folderOf, groupByFolder, hiddenHashes, indexEntry, isoNow,
+  keyFor, mergeLibrary, searchLibrary, shownFolder, withEntry, withHidden } from "./core/library.js";
 import { applyDeltas, deltaFor, sameFixes } from "./core/sync.js";
 import * as store from "./core/store.js";
 
-const VERSION = "2.5.0";
+const VERSION = "2.6.0";
 // Proportions of the burned vertical video (identical in every pipeline calibration), in em of
 // the main subtitle text: line limit, frame width, and the height the three blocks need.
 const FIT_EM = 892.4 / 67.797, FRAME_EM = 1080 / 67.797, PANEL_EM = 14.4, CTX_SCALE = 74 / 93;
@@ -206,8 +206,12 @@ async function dropboxFiles() {
 // ---------------------------------------------------------------- the Dropbox library (start screen)
 // The videos in Dropbox by folder, each with what the repository knows of it: ready, being
 // transcribed, not transcribed yet, or failed (core/library.js matches them). A tap streams it;
-// in select mode a tap chooses it, to delete the chosen files from Dropbox.
-const library = { items: [], loading: null, opening: false, note: "", watchUntil: 0 };
+// in select mode a tap chooses it, to hide the chosen files from the list or delete them from
+// Dropbox. Hidden files (hidden.json in the repository, by content hash) have their own view.
+// hiddenAt: when the last hide or unhide reached GitHub (Infinity while any is on its way, counted in
+// hiding); a listing begun before that keeps the hidden set as it is here.
+const library = { items: [], loading: null, opening: false, note: "", watchUntil: 0,
+  hidden: new Set(), view: "all", hiddenAt: 0, hiding: 0 };
 const picking = { on: false, paths: new Set(), busy: "" };   // select mode: the chosen files' paths; busy: progress
 const openFolders = new Set();
 const BADGES = { ready: ["Ready", "ok"], pending: ["Transcribing", "busy"], failed: ["Failed", "bad"], null: ["Not transcribed", "none"] };
@@ -218,8 +222,10 @@ function loadLibrary() {
   if (!library.loading) {
     library.loading = (async () => {
       try {
-        const [{ files, offline }, index] = await Promise.all([dropboxFiles(), repoIndex()]);
+        const started = Date.now();
+        const [{ files, offline }, index, hidden] = await Promise.all([dropboxFiles(), repoIndex(), hiddenFiles()]);
         library.items = mergeLibrary(files, index.videos || []);
+        if (hidden && started > library.hiddenAt) library.hidden = hidden;
         library.note = offline ? "Offline: the list as it was last time." : "";
       } catch (err) {
         library.note = `Dropbox: ${err.message}`;
@@ -233,15 +239,31 @@ function loadLibrary() {
   return library.loading;
 }
 const mb = (bytes) => `${bytes >= 1e9 ? (bytes / 1e9).toFixed(1) : Math.max(1, Math.round(bytes / 1e6))} ${bytes >= 1e9 ? "GB" : "MB"}`;
+/** The files of the view on screen: the hidden ones, or all the others. */
+const inView = () => library.items.filter((i) => library.hidden.has(i.hash) === (library.view === "hidden"));
+/** The content hashes hidden.json hides, or null when it can't be read now (the set stays as it is). */
+async function hiddenFiles() {
+  try {
+    const f = await repoFile(HIDDEN_FILE);
+    return hiddenHashes(f ? JSON.parse(f.text) : null);
+  } catch {
+    return null;
+  }
+}
 function drawLibrary() {
-  const q = $("libSearch").value.trim(), items = searchLibrary(library.items, q), groups = groupByFolder(items);
-  for (const p of picking.paths) if (!library.items.some((i) => i.path === p)) picking.paths.delete(p);
-  const n = library.items.length, busy = library.items.filter((i) => i.status === "pending").length;
-  const audio = library.items.filter((i) => i.audio).length, videos = n - audio;
+  if (library.view === "hidden" && !library.items.some((i) => library.hidden.has(i.hash))) library.view = "all";
+  const shown = inView(), hiddenView = library.view === "hidden";
+  const q = $("libSearch").value.trim(), items = searchLibrary(shown, q), groups = groupByFolder(items);
+  for (const p of picking.paths) if (!shown.some((i) => i.path === p)) picking.paths.delete(p);
+  const n = shown.length, busy = shown.filter((i) => i.status === "pending").length;
+  const audio = shown.filter((i) => i.audio).length, videos = n - audio;
   const count = [videos && `${videos} video${videos === 1 ? "" : "s"}`, audio && `${audio} audio file${audio === 1 ? "" : "s"}`].filter(Boolean).join(" and ");
-  $("libNote").textContent = library.note || (library.loading && !n ? "Loading…"
-    : !n ? "Nothing yet. Put lecture videos or audio in Dropbox, in Apps/Lecture Karaoke (a folder per course)."
-    : q && !items.length ? "Nothing matches." : `${count}${busy ? `, ${busy} being transcribed` : ""}.`);
+  $("libNote").textContent = library.note || (library.loading && !library.items.length ? "Loading…"
+    : !library.items.length ? "Nothing yet. Put lecture videos or audio in Dropbox, in Apps/Lecture Karaoke (a folder per course)."
+    : q && !items.length ? "Nothing matches."
+    : hiddenView ? `${count} hidden from the list${busy ? `, ${busy} being transcribed` : ""}. They stay in Dropbox; select them to show them again.`
+    : !n ? `All ${library.items.length} files are hidden from the list.`
+    : `${count}${busy ? `, ${busy} being transcribed` : ""}.`);
   $("libList").replaceChildren(...groups.map((g) => {
     const d = Object.assign(document.createElement("details"), { className: "lib-folder", open: !!q || groups.length === 1 || openFolders.has(g.folder) });
     d.addEventListener("toggle", () => { if (!$("libSearch").value.trim()) (d.open ? openFolders.add(g.folder) : openFolders.delete(g.folder)); });
@@ -284,19 +306,55 @@ function pick(it, b) {
   drawPick();
 }
 function drawPick() {
-  const n = picking.paths.size;
+  const n = picking.paths.size, hiddenView = library.view === "hidden";
+  const hidden = library.items.filter((i) => library.hidden.has(i.hash)).length;
   $("libSelect").textContent = picking.on ? "Cancel" : "Select";
-  $("libSelect").hidden = !library.items.length && !picking.on;
+  $("libSelect").hidden = !inView().length && !picking.on;
   $("libSelect").disabled = !!picking.busy;
+  $("libHidden").hidden = picking.on || (!hidden && !hiddenView);
+  $("libHidden").textContent = hiddenView ? "All files" : `Hidden (${hidden})`;
   $("libPick").hidden = !picking.on;
-  $("libPicked").textContent = picking.busy || (n ? `${n} selected` : "Tap the files to delete.");
-  $("libDelete").disabled = !n || !!picking.busy;
+  $("libPicked").textContent = picking.busy || (n ? `${n} selected` : `Tap the files to ${hiddenView ? "unhide" : "hide"} or delete.`);
+  $("libHide").textContent = hiddenView ? "Unhide" : "Hide";
+  $("libHide").disabled = $("libDelete").disabled = !n || !!picking.busy;
 }
 $("libSelect").addEventListener("click", () => {
   picking.on = !picking.on;
   picking.paths.clear();
   drawLibrary();
 });
+$("libHidden").addEventListener("click", () => {
+  library.view = library.view === "hidden" ? "all" : "hidden";
+  drawLibrary();
+});
+$("libHide").addEventListener("click", () => {
+  const items = library.items.filter((i) => picking.paths.has(i.path));
+  if (items.length) setHidden(items, library.view !== "hidden");
+});
+/** Takes these files off the list (hide) or puts them back, on every device: hidden.json in the
+ *  repository. They stay in Dropbox. The toast's Undo reverses it. */
+async function setHidden(items, hide) {
+  const n = items.length, what = n === 1 ? `“${items[0].name}”` : `${n} files`;
+  const mark = (on) => { for (const it of items) (on ? library.hidden.add(it.hash) : library.hidden.delete(it.hash)); };
+  mark(hide);
+  library.hiding++;
+  library.hiddenAt = Infinity;
+  picking.on = false;
+  picking.paths.clear();
+  drawLibrary();
+  try {
+    const data = await gh.update(HIDDEN_FILE, (cur) => withHidden(cur, items, hide),
+      `${hide ? "Hide" : "Unhide"} ${n === 1 ? items[0].name : `${n} files`} in the app's list`);
+    if (library.hiding === 1) library.hidden = hiddenHashes(data);   // as GitHub has it, other devices' changes too
+    toast(hide ? `Hid ${what} from the list.` : `${what} ${n === 1 ? "is" : "are"} back in the list.`, "Undo", () => setHidden(items, !hide));
+  } catch (err) {
+    mark(!hide);
+    toast(`Couldn't ${hide ? "hide" : "unhide"} ${what}: ${err.message}`);
+  } finally {
+    if (--library.hiding === 0) library.hiddenAt = Date.now();
+    drawLibrary();
+  }
+}
 let chosen = [];
 $("libDelete").addEventListener("click", () => {
   chosen = library.items.filter((i) => picking.paths.has(i.path));
@@ -1851,6 +1909,7 @@ function openSettings() {
   $("offsetInfo").textContent = isFirefox ? "" :
     S.audioOffsetMs ? `This file's audio starts ${S.audioOffsetMs} ms in; that is already allowed for.` : "";
   drawFixList();
+  drawTranscriptLinks();
   $("settings").showModal();
   renderGet();
 }
@@ -1972,6 +2031,47 @@ $("exportBtn").addEventListener("click", async () => {
     setTimeout(() => URL.revokeObjectURL(a.href), 10000);
   }
 });
+
+// Settings → Transcript: a link to the lecture's transcript with its word fixes as plain text (one
+// sentence per line) and one as JSON. Phones and tablets open the share sheet (Save to Files, Copy,
+// other apps); computers download the file.
+function transcriptAs(kind) {
+  const base = S.videoName.replace(/\.[^.]+$/, "");
+  return kind === "json"
+    ? new File([JSON.stringify(exportTranscript(S.transcript, S.words, S.rec.fixes || [], S.videoName))], `${base}.json`,
+      { type: "application/json" })
+    : new File([transcriptText(S.words)], `${base}.txt`, { type: "text/plain" });
+}
+/** Points the link at a fresh copy of the transcript; returns that file. */
+function linkTranscript(a, kind) {
+  if (a.href.startsWith("blob:")) URL.revokeObjectURL(a.href);
+  const file = transcriptAs(kind);
+  Object.assign(a, { href: URL.createObjectURL(file), download: file.name });
+  return file;
+}
+function drawTranscriptLinks() {
+  const links = [[$("txText"), "text"], [$("txJson"), "json"]];
+  for (const [a, kind] of links) {
+    a.hidden = !S.transcript;
+    if (S.transcript) linkTranscript(a, kind);
+  }
+  $("txNote").textContent = S.transcript
+    ? "This lecture's transcript with your word fixes: one sentence per line, or all of it with word timings."
+    : "No transcript yet.";
+}
+for (const [id, kind] of [["txText", "text"], ["txJson", "json"]]) {
+  $(id).addEventListener("click", async (e) => {
+    if (!S.transcript) return e.preventDefault();
+    const a = e.currentTarget, file = linkTranscript(a, kind);   // with the latest fixes
+    if (!isMobile || !navigator.canShare?.({ files: [file] })) return;   // the link downloads it
+    e.preventDefault();
+    try {
+      await navigator.share({ files: [file], title: file.name });
+    } catch (err) {
+      if (err.name !== "AbortError") Object.assign(document.createElement("a"), { href: a.href, download: file.name }).click();
+    }
+  });
+}
 
 // ---------------------------------------------------------------- remembering, wake lock, toast
 let toastTimer = 0;
