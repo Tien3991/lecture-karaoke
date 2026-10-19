@@ -78,7 +78,9 @@ The job transcribes speech as English unless a folder name says otherwise. A fol
 ends in `___` and a two-letter language code sets the language of everything in it, subfolders
 too: `Giải tích 1___vn` (or `___vi`) is Vietnamese, `___fr` French. The nearest such folder
 wins. New files are transcribed oldest first, and Dropbox counts a rename as a change, so a renamed
-folder's files go to the back of the line.
+folder's files go to the back of the line. The app shows such a folder without its mark (search
+ignores it too), and a lecture in a Vietnamese folder starts with Vietnamese line breaks (⋯ →
+Language; a language chosen there stays with that transcript).
 
 *Select* deletes files from Dropbox: tap the files, then **Delete**, and confirm. Dropbox keeps
 deleted files for at least 30 days (restore them from *Deleted files* on dropbox.com). Their

@@ -12,7 +12,8 @@ import path from "node:path";
 import { createServer } from "../dev/serve.mjs";
 import { BLOCK, CHUNK, ContentHasher, Dropbox, contentHash } from "../core/dropbox.js";
 import { GitHub } from "../core/github.js";
-import { changedEntry, entryStatus, groupByFolder, indexEntry, keyFor, mergeLibrary, searchLibrary, withEntry } from "../core/library.js";
+import { changedEntry, entryStatus, folderLanguage, groupByFolder, indexEntry, keyFor, mergeLibrary, searchLibrary, shownFolder,
+  withEntry } from "../core/library.js";
 
 /** Dropbox's content hash computed with node:crypto, to check the browser code against. */
 function reference(buf) {
@@ -264,6 +265,22 @@ test("library: Dropbox videos and recordings matched to index entries by content
   assert.deepEqual(Object.keys(moved).slice(0, 18), Object.keys(entry), "an old entry gets every shared field, in order");
   assert.equal(moved.later, "kept", "fields the app doesn't know are kept");
   assert.deepEqual([moved.folder, moved.dropbox.path, moved.status, moved.transcript], ["CS224N", "/CS224N/Old.mp4", "ready", "transcripts/Old.json"]);
+});
+
+test("a folder's language mark: the language of the lectures under it, left out of the name shown", () => {
+  assert.equal(folderLanguage("/giaitich1___vn/Bài 1.mp4"), "vi", "Vietnam's country code too");
+  assert.equal(folderLanguage("/Giải tích 2___VI/Chương 1/Bài 1.mp4"), "vi", "subfolders too, any case");
+  assert.equal(folderLanguage("/Mixed___vi/English guest___en/Talk.mp3"), "en", "the nearest mark wins");
+  for (const p of ["/calculus/Udemy - part 1/a.mp4", "/notes___old/a.mp4", "/two__vi/a.mp4", "/a___vi.mp4", "/a___vi b/c.mp4", "a.mp4"]) {
+    assert.equal(folderLanguage(p), null, p);
+  }
+  assert.equal(shownFolder("Giải tích 1___vn/Chương 1"), "Giải tích 1/Chương 1");
+  assert.equal(shownFolder("Mixed___vi/English guest___en"), "Mixed/English guest");
+  assert.equal(shownFolder("notes___old"), "notes___old");
+  const file = (p) => ({ ".tag": "file", name: p.split("/").pop(), path_lower: p.toLowerCase(), path_display: p, size: 1, content_hash: p });
+  const lib = mergeLibrary([file("/giaitich1___vn/Bài 1.mp4"), file("/CS101/Lecture.mp4")], []);
+  assert.deepEqual(searchLibrary(lib, "giaitich1 bai").map((i) => i.name), ["Bài 1.mp4"]);
+  assert.deepEqual(searchLibrary(lib, "vn"), [], "the hidden mark isn't searched");
 });
 
 test("dispatch: starts transcribe.yml on main with the item; a token without Actions access is refused", async () => {

@@ -12,12 +12,12 @@ import { applyFixes, exportTranscript, transcriptText } from "./core/corrections
 import { GitHub } from "./core/github.js";
 import { Dropbox, LINK_MS, contentHash } from "./core/dropbox.js";
 import { extractAdts } from "./core/audio.js";
-import { STAGING, changedEntry, entryStatus, folderOf, groupByFolder, indexEntry, isoNow, keyFor, mergeLibrary, searchLibrary,
-  withEntry } from "./core/library.js";
+import { STAGING, changedEntry, entryStatus, folderLanguage, folderOf, groupByFolder, indexEntry, isoNow, keyFor, mergeLibrary,
+  searchLibrary, shownFolder, withEntry } from "./core/library.js";
 import { applyDeltas, deltaFor, sameFixes } from "./core/sync.js";
 import * as store from "./core/store.js";
 
-const VERSION = "2.4.0";
+const VERSION = "2.5.0";
 // Proportions of the burned vertical video (identical in every pipeline calibration), in em of
 // the main subtitle text: line limit, frame width, and the height the three blocks need.
 const FIT_EM = 892.4 / 67.797, FRAME_EM = 1080 / 67.797, PANEL_EM = 14.4, CTX_SCALE = 74 / 93;
@@ -246,7 +246,8 @@ function drawLibrary() {
     const d = Object.assign(document.createElement("details"), { className: "lib-folder", open: !!q || groups.length === 1 || openFolders.has(g.folder) });
     d.addEventListener("toggle", () => { if (!$("libSearch").value.trim()) (d.open ? openFolders.add(g.folder) : openFolders.delete(g.folder)); });
     const summary = document.createElement("summary");
-    summary.append(g.folder || "Lecture Karaoke", Object.assign(document.createElement("span"), { className: "lib-count", textContent: ` ${g.items.length}` }));
+    summary.append(shownFolder(g.folder) || g.folder || "Lecture Karaoke",
+      Object.assign(document.createElement("span"), { className: "lib-count", textContent: ` ${g.items.length}` }));
     const ul = Object.assign(document.createElement("ul"), { className: "lib-items" });
     ul.append(...g.items.map((it) => {
       const [label, cls] = BADGES[it.status], b = Object.assign(document.createElement("button"), { type: "button", className: "lib-item" });
@@ -692,9 +693,17 @@ function showVideo(picked, resumeAt = 0) {
   }, { once: true });
 }
 
-/** Subtitles for the video on screen from this transcript (rec: its record on this device). Also
- *  used when a transcript arrives while the video plays: playback is left as it is. */
-async function useTranscript(data, picked, { ref, key, text }, rec) {
+/** The language whose words long sentences are split before, for a lecture in Dropbox at path: the
+ *  one its folder's name gives ("…___vn"), if the app knows that language's words; else English. */
+function folderSplitLanguage(path) {
+  const code = path ? folderLanguage(path) : null;
+  return code && CONJ_BY_LANGUAGE[code] ? code : "en";
+}
+
+/** Subtitles for the video on screen from this transcript (rec: its record on this device; entry:
+ *  its index entry, when known). Also used when a transcript arrives while the video plays:
+ *  playback is left as it is. */
+async function useTranscript(data, picked, { ref, key, text, entry }, rec) {
   const { info, fingerprint } = picked, name = picked.file?.name ?? picked.name, size = picked.file?.size ?? picked.size;
   const id = data.id || name;
   Object.assign(S, {
@@ -703,7 +712,8 @@ async function useTranscript(data, picked, { ref, key, text }, rec) {
     // Soniox counts from the first audio sample; Safari and Chromium keep the MP4's leading empty
     // edit (the audio starts that much into the timeline), Firefox drops it.
     audioOffsetMs: isFirefox ? 0 : Math.round(info.audioStartSec * 1000),
-    leadMs: prefs.offsetOn ? prefs.offsetMs : 0, syncMs: rec.syncMs ?? 0, language: rec.language ?? "en",
+    leadMs: prefs.offsetOn ? prefs.offsetMs : 0, syncMs: rec.syncMs ?? 0,
+    language: rec.language ?? folderSplitLanguage(picked.dropbox?.path ?? entry?.dropbox?.path ?? rec.dropbox?.path),
     shown: -2, lastSecond: -1,
   });
   Object.assign(rec, {
@@ -977,7 +987,7 @@ async function transcriptArrived(w) {
     const text = await transcriptFile(ref);
     if (!text || W !== w || S.picked !== picked || S.transcript) return;
     const data = JSON.parse(text);
-    await useTranscript(data, picked, { ref, key: entry.key }, await store.load(data.id || videoFields(picked).name));
+    await useTranscript(data, picked, { ref, key: entry.key, entry }, await store.load(data.id || videoFields(picked).name));
     toast("The subtitles are ready");
   }
   renderGet();
@@ -986,7 +996,7 @@ async function transcriptArrived(w) {
 async function openReady(w) {
   const ref = `gh:${gh.repo}:${w.entry.transcript}`, text = await transcriptFile(ref);
   if (!text) return toast("Its transcript can't be downloaded right now.");
-  await openPair(JSON.parse(text), w.picked, { ref, key: w.entry.key, sure: true });
+  await openPair(JSON.parse(text), w.picked, { ref, key: w.entry.key, sure: true, entry: w.entry });
 }
 
 // Way B asks for the course folder (the last one used is offered, and the folders in Dropbox).
@@ -1319,7 +1329,7 @@ function setLook() {
   if ("mediaSession" in navigator && typeof MediaMetadata === "function") {
     try {
       navigator.mediaSession.metadata = p ? new MediaMetadata({ title: S.videoName.replace(/\.[^.]+$/, ""),
-        artist: p.dropbox ? folderOf(p.dropbox.path) : "", album: "Lecture Karaoke",
+        artist: p.dropbox ? shownFolder(folderOf(p.dropbox.path)) : "", album: "Lecture Karaoke",
         artwork: cover ? [{ src: look.url, type: art.type }] : [] }) : null;
     } catch { /* not here */ }
   }

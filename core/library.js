@@ -16,6 +16,24 @@ export const STAGING = "/.staging/";   // audio waiting to be transcribed (the j
 /** The course folder of a Dropbox path: "/CS224N/Lecture 12.mp4" -> "CS224N", "/a.mp4" -> "". */
 export const folderOf = (path) => path.split("/").slice(1, -1).join("/");
 
+// A folder whose name ends in ___ and a two-letter language code gives everything under it, subfolders
+// too, that language ("Giải tích 1___vn", or ___vi, is Vietnamese); the nearest marked folder wins.
+// The transcription job reads folder names the same way (vvm.py folder_language).
+const LANGUAGE_ALIASES = { vn: "vi" };   // Vietnam's country code, as people write it
+
+/** The language code a file's folders give it (a Dropbox path), or null: none (English). */
+export function folderLanguage(path) {
+  const folders = path.split("/").slice(0, -1);
+  for (let i = folders.length - 1; i >= 0; i--) {
+    const m = /___([A-Za-z]{2})$/.exec(folders[i]);
+    if (m) return LANGUAGE_ALIASES[m[1].toLowerCase()] ?? m[1].toLowerCase();
+  }
+  return null;
+}
+
+/** A folder as shown, without its language marks: "Giải tích 1___vn/Chương 1" -> "Giải tích 1/Chương 1". */
+export const shownFolder = (folder) => folder.replace(/___[A-Za-z]{2}(?=\/|$)/g, "");
+
 /** ready, pending (being transcribed) or failed; null without an entry. An entry with a
  *  transcript is ready whatever its status says (entries made before statuses have none). */
 export function entryStatus(entry) {
@@ -56,11 +74,11 @@ export function groupByFolder(items) {
     .sort((a, b) => (a.folder === "" ? -1 : b.folder === "" ? 1 : byName(a.folder, b.folder)));
 }
 
-/** Items whose name or folder has every word of the query (case and accents ignored). */
+/** Items whose name or folder (as shown) has every word of the query (case and accents ignored). */
 export function searchLibrary(items, query) {
   const words = query.split(/\s+/).map(norm).filter(Boolean);
   if (!words.length) return items;
-  return items.filter((it) => { const hay = norm(`${it.folder} ${it.name}`); return words.every((w) => hay.includes(w)); });
+  return items.filter((it) => { const hay = norm(`${shownFolder(it.folder)} ${it.name}`); return words.every((w) => hay.includes(w)); });
 }
 
 /** The index key for a video: its entry's key if it has one, else the file's stem, made unique
