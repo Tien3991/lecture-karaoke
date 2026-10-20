@@ -159,6 +159,12 @@ test("release: app.js, sw.js and index.html carry the same version", () => {
   const app = src("app.js").match(/const VERSION = "([^"]+)"/)[1];
   assert.equal(src("sw.js").match(/const VERSION = "([^"]+)"/)[1], app, "sw.js");
   assert.equal(src("index.html").match(/<meta name="app-version" content="([^"]+)">/)[1], app, "index.html");
+  // the service worker serves only what it cached: every module the app imports must be on its list
+  const shell = JSON.parse(src("sw.js").match(/const SHELL = (\[[^\]]+\])/)[1]);
+  const imported = (f) => [...src(f).matchAll(/^import [^;]+? from "\.\/([^"]+)"/gm)].map((m) => (f.startsWith("core/") ? "core/" : "") + m[1]);
+  const modules = new Set(imported("app.js"));
+  for (const m of [...modules]) for (const dep of imported(m)) modules.add(dep);
+  for (const m of modules) assert.ok(shell.includes(m), `${m} is missing from sw.js SHELL`);
 });
 
 test("video fingerprint: the app computes what vertical_video_maker computes, for every video", { skip: !existsSync(FIX + "fingerprints.json") && "no fingerprints.json" }, async (t) => {
@@ -200,6 +206,38 @@ test("shared fixes: changes from two devices merge instead of overwriting each o
   assert.equal(removed.find((f) => f.start_ms === 1500).new, "");
   assert.equal(applyDeltas(removed, [{ start_ms: 1500, old: "um", new: null }]).length, 1);
   assert.ok(sameFixes(remote2, [...remote2].reverse()), "order doesn't matter");
+});
+
+test("shared notes: notes added, edited and deleted on two devices; of two changes to a note the later wins", async () => {
+  const { applyNoteChanges, newNoteId, noteStamp, shownNotes } = await import("../core/notes.js");
+  const note = (id, text, created, updated = created, more = {}) => ({ id, at_ms: 1000, text, created, updated, ...more });
+  // A adds two notes while offline; B adds one and syncs first: all three kept, shown newest first
+  const remote1 = applyNoteChanges([], [note("b1", "from B", "t2")]);
+  const remote2 = applyNoteChanges(remote1, [note("a1", "first", "t1"), note("a2", "second", "t3")]);
+  assert.deepEqual(remote2.map((n) => n.id), ["a1", "b1", "a2"], "kept oldest first");
+  assert.deepEqual(shownNotes(remote2).map((n) => n.text), ["second", "from B", "first"]);
+  // B edits a1 at t5; A's older edit of it (t4) reaches GitHub later and loses
+  const remote3 = applyNoteChanges(remote2, [note("a1", "first, by B", "t1", "t5")]);
+  const remote4 = applyNoteChanges(remote3, [note("a1", "first, by A", "t1", "t4")]);
+  assert.equal(remote4.find((n) => n.id === "a1").text, "first, by B");
+  // deleted at t6: hidden, kept as a marker; an older copy sent again doesn't bring it back
+  const remote5 = applyNoteChanges(remote4, [note("a2", "second", "t3", "t6", { deleted: true })]);
+  assert.deepEqual(shownNotes(remote5).map((n) => n.id), ["b1", "a1"]);
+  assert.equal(remote5.length, 3);
+  assert.deepEqual(applyNoteChanges(remote5, remote2), remote5, "everything older than GitHub's copy changes nothing");
+  assert.deepEqual(applyNoteChanges(remote5, [remote5[0]]), remote5, "sending a change twice is the same as once");
+  assert.equal(shownNotes(applyNoteChanges(remote5, [note("a2", "second, again", "t3", "t7")]))[0].text, "second, again", "a later edit wins over a deletion");
+  assert.deepEqual(shownNotes(null), []);
+  // a change is stamped after the note it was made to, even by a device whose clock is behind
+  assert.equal(noteStamp("2026-10-20T23:00:00.000Z", "2026-10-20T15:00:00.000Z"), "2026-10-20T23:00:00.001Z");
+  assert.equal(noteStamp("2026-10-20T15:00:00.000Z", "2026-10-20T15:00:05.000Z"), "2026-10-20T15:00:05.000Z");
+  assert.equal(noteStamp(undefined, "2026-10-20T15:00:05.000Z"), "2026-10-20T15:00:05.000Z");
+  const ahead = note("a3", "edited on a device whose clock is ahead", "t1", "2026-10-20T23:00:00.000Z");
+  const gone = { ...ahead, deleted: true, updated: noteStamp(ahead.updated, "2026-10-20T15:00:00.000Z") };
+  assert.deepEqual(shownNotes(applyNoteChanges([ahead], [gone])), [], "deleted here all the same");
+  const ids = new Set(Array.from({ length: 1000 }, newNoteId));
+  assert.equal(ids.size, 1000);
+  assert.match([...ids][0], /^[0-9a-z]+-[0-9a-z]+$/);
 });
 
 test("GitHub contents: text survives base64 both ways, Vietnamese and emoji included", async () => {

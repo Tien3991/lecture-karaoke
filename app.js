@@ -12,12 +12,14 @@ import { applyFixes, exportTranscript, transcriptText } from "./core/corrections
 import { GitHub } from "./core/github.js";
 import { Dropbox, LINK_MS, contentHash } from "./core/dropbox.js";
 import { extractAdts } from "./core/audio.js";
-import { HIDDEN_FILE, STAGING, changedEntry, entryStatus, folderLanguage, folderOf, groupByFolder, hiddenHashes, indexEntry, isoNow,
-  keyFor, mergeLibrary, searchLibrary, shownFolder, withEntry, withHidden } from "./core/library.js";
+import { HIDDEN_FILE, PINNED_FILE, PLAYED_FILE, STAGING, changedEntry, entryStatus, folderLanguage, folderOf, groupByFolder, hiddenHashes,
+  indexEntry, isoNow, keyFor, mergeLibrary, pinnedFolders, playedHashes, randomPick, searchLibrary, shownFolder, withEntry, withHidden,
+  withPinned, withPlayed } from "./core/library.js";
 import { applyDeltas, deltaFor, sameFixes } from "./core/sync.js";
+import { applyNoteChanges, newNoteId, noteStamp, shownNotes } from "./core/notes.js";
 import * as store from "./core/store.js";
 
-const VERSION = "2.7.0";
+const VERSION = "2.8.0";
 // Proportions of the burned vertical video (identical in every pipeline calibration), in em of
 // the main subtitle text: line limit, frame width, and the height the three blocks need.
 const FIT_EM = 892.4 / 67.797, FRAME_EM = 1080 / 67.797, PANEL_EM = 14.4, CTX_SCALE = 74 / 93;
@@ -208,10 +210,52 @@ async function dropboxFiles() {
 // transcribed, not transcribed yet, or failed (core/library.js matches them). A tap streams it;
 // in select mode a tap chooses it, to hide the chosen files from the list or delete them from
 // Dropbox. Hidden files (hidden.json in the repository, by content hash) have their own view.
-// hiddenAt: when the last hide or unhide reached GitHub (Infinity while any is on its way, counted in
-// hiding); a listing begun before that keeps the hidden set as it is here.
-const library = { items: [], loading: null, opening: false, note: "", watchUntil: 0,
-  hidden: new Set(), view: "all", hiddenAt: 0, hiding: 0 };
+// Files never played on any device are marked New (played.json), and pinned folders (pinned.json)
+// come first; each folder has a button that plays a random lecture from it.
+
+/** A set kept in a repository file that every device shares (hidden.json, played.json, pinned.json):
+ *  read with each listing, changed here at once and then on GitHub. at: when the last change reached
+ *  GitHub (Infinity while any is on its way, counted in writing); a listing begun before that keeps
+ *  the set as it is here. known: read from GitHub at least once. */
+class SharedSet {
+  constructor(file, keysOf) { Object.assign(this, { file, keysOf, set: new Set(), at: 0, writing: 0, known: false }); }
+  has(key) { return this.set.has(key); }
+  /** The keys the file has now, or null when it can't be read now (the set stays as it is). */
+  async fetch() {
+    try {
+      const f = await repoFile(this.file);
+      return this.keysOf(f ? JSON.parse(f.text) : null);
+    } catch {
+      return null;
+    }
+  }
+  /** Takes what a listing begun at `started` read, unless a change made here since would be lost. */
+  take(got, started) {
+    if (!got) return;
+    this.known = true;
+    if (started > this.at) this.set = got;
+  }
+  /** Adds keys to the set here (add false: removes them) before it returns, then changes the file on
+   *  GitHub with change(its data). When that fails, the set goes back and the error is thrown. */
+  async write(keys, add, change, message) {
+    const mark = (on) => { for (const k of keys) (on ? this.set.add(k) : this.set.delete(k)); };
+    mark(add);
+    this.writing++;
+    this.at = Infinity;
+    try {
+      const data = await gh.update(this.file, change, message);
+      if (this.writing === 1) Object.assign(this, { set: this.keysOf(data), known: true });   // as GitHub has it, other devices' changes too
+    } catch (err) {
+      mark(!add);
+      throw err;
+    } finally {
+      if (--this.writing === 0) this.at = Date.now();
+    }
+  }
+}
+const library = { items: [], loading: null, opening: false, note: "", watchUntil: 0, view: "all",
+  hidden: new SharedSet(HIDDEN_FILE, hiddenHashes), played: new SharedSet(PLAYED_FILE, playedHashes),
+  pinned: new SharedSet(PINNED_FILE, pinnedFolders) };
 const picking = { on: false, paths: new Set(), busy: "" };   // select mode: the chosen files' paths; busy: progress
 const openFolders = new Set();
 const BADGES = { ready: ["Ready", "ok"], pending: ["Transcribing", "busy"], failed: ["Failed", "bad"], null: ["Not transcribed", "none"] };
@@ -222,11 +266,12 @@ function loadLibrary() {
   if (!library.loading) {
     library.loading = (async () => {
       try {
-        const started = Date.now();
-        const [{ files, offline }, index, hidden] = await Promise.all([dropboxFiles(), repoIndex(), hiddenFiles()]);
+        const started = Date.now(), shared = [library.hidden, library.played, library.pinned];
+        const [{ files, offline }, index, ...got] = await Promise.all([dropboxFiles(), repoIndex(), ...shared.map((s) => s.fetch())]);
         library.items = mergeLibrary(files, index.videos || []);
-        if (hidden && started > library.hiddenAt) library.hidden = hidden;
+        shared.forEach((s, i) => s.take(got[i], started));
         library.note = offline ? "Offline: the list as it was last time." : "";
+        if (!offline) sharePlayed();
       } catch (err) {
         library.note = `Dropbox: ${err.message}`;
       }
@@ -241,19 +286,12 @@ function loadLibrary() {
 const mb = (bytes) => `${bytes >= 1e9 ? (bytes / 1e9).toFixed(1) : Math.max(1, Math.round(bytes / 1e6))} ${bytes >= 1e9 ? "GB" : "MB"}`;
 /** The files of the view on screen: the hidden ones, or all the others. */
 const inView = () => library.items.filter((i) => library.hidden.has(i.hash) === (library.view === "hidden"));
-/** The content hashes hidden.json hides, or null when it can't be read now (the set stays as it is). */
-async function hiddenFiles() {
-  try {
-    const f = await repoFile(HIDDEN_FILE);
-    return hiddenHashes(f ? JSON.parse(f.text) : null);
-  } catch {
-    return null;
-  }
-}
+/** Never played on any device (known once played.json has been read). */
+const isNew = (it) => library.played.known && !library.played.has(it.hash) && !playedQueue.has(it.hash);
 function drawLibrary() {
   if (library.view === "hidden" && !library.items.some((i) => library.hidden.has(i.hash))) library.view = "all";
   const shown = inView(), hiddenView = library.view === "hidden";
-  const q = $("libSearch").value.trim(), items = searchLibrary(shown, q), groups = groupByFolder(items);
+  const q = $("libSearch").value.trim(), items = searchLibrary(shown, q), groups = groupByFolder(items, library.pinned.set);
   for (const p of picking.paths) if (!shown.some((i) => i.path === p)) picking.paths.delete(p);
   const n = shown.length, busy = shown.filter((i) => i.status === "pending").length;
   const audio = shown.filter((i) => i.audio).length, videos = n - audio;
@@ -264,20 +302,22 @@ function drawLibrary() {
     : hiddenView ? `${count} hidden from the list${busy ? `, ${busy} being transcribed` : ""}. They stay in Dropbox; select them to show them again.`
     : !n ? `All ${library.items.length} files are hidden from the list.`
     : `${count}${busy ? `, ${busy} being transcribed` : ""}.`);
+  const withTools = !picking.on && !hiddenView;
   $("libList").replaceChildren(...groups.map((g) => {
     const d = Object.assign(document.createElement("details"), { className: "lib-folder", open: !!q || groups.length === 1 || openFolders.has(g.folder) });
     d.addEventListener("toggle", () => { if (!$("libSearch").value.trim()) (d.open ? openFolders.add(g.folder) : openFolders.delete(g.folder)); });
-    const summary = document.createElement("summary");
-    summary.append(shownFolder(g.folder) || g.folder || "Lecture Karaoke",
-      Object.assign(document.createElement("span"), { className: "lib-count", textContent: ` ${g.items.length}` }));
+    const summary = document.createElement("summary"), name = shownFolder(g.folder) || g.folder || "Lecture Karaoke";
+    summary.append(name, Object.assign(document.createElement("span"), { className: "lib-count", textContent: ` ${g.items.length}` }));
     const ul = Object.assign(document.createElement("ul"), { className: "lib-items" });
     ul.append(...g.items.map((it) => {
       const [label, cls] = BADGES[it.status], b = Object.assign(document.createElement("button"), { type: "button", className: "lib-item" });
       const meta = [it.audio ? "Audio" : "", it.entry?.duration_ms ? clock(it.entry.duration_ms / 1000) : "", mb(it.size),
         it.status === "failed" ? it.entry.error : ""];
+      const metaLine = Object.assign(document.createElement("span"), { className: "lib-meta" });
+      if (isNew(it)) metaLine.append(Object.assign(document.createElement("span"), { className: "lib-new", textContent: "New" }), " · ");
+      metaLine.append(meta.filter(Boolean).join(" · "));
       b.append(Object.assign(document.createElement("span"), { className: "lib-title", textContent: it.name.replace(/\.[^.]+$/, "") }),
-        Object.assign(document.createElement("span"), { className: `badge ${cls}`, textContent: label }),
-        Object.assign(document.createElement("span"), { className: "lib-meta", textContent: meta.filter(Boolean).join(" · ") }));
+        Object.assign(document.createElement("span"), { className: `badge ${cls}`, textContent: label }), metaLine);
       if (picking.on) {
         b.classList.add("picking");
         b.setAttribute("aria-pressed", String(picking.paths.has(it.path)));
@@ -289,11 +329,100 @@ function drawLibrary() {
       return li;
     }));
     d.append(summary, ul);
-    return d;
+    if (!withTools) return d;
+    // Beside the folder's name, not in it (a button inside <summary> would open and close the folder):
+    // a random lecture from the folder, and the pin.
+    const group = Object.assign(document.createElement("div"), { className: "lib-group" });
+    const tools = Object.assign(document.createElement("div"), { className: "lib-tools" });
+    const tool = (label, svg, act) => {
+      const b = Object.assign(document.createElement("button"), { type: "button", className: "lib-tool", ariaLabel: label, title: label, innerHTML: svg });
+      b.addEventListener("click", act);
+      return b;
+    };
+    const pin = tool(g.pinned ? `Unpin “${name}”` : `Pin “${name}” to the top`, PIN_SVG, () => setPinned(g.folder, !g.pinned, name));
+    pin.setAttribute("aria-pressed", String(g.pinned));
+    tools.append(tool(`Play a random lecture from “${name}”`, SHUFFLE_SVG, () => { const it = randomPick(g.items); if (it) openFromDropbox(it); }), pin);
+    group.append(d, tools);
+    return group;
   }));
   drawPick();
 }
 $("libSearch").addEventListener("input", drawLibrary);
+const SHUFFLE_SVG = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7h3.2c2 0 3.1 1 4.1 2.6l2.6 4.8c1 1.6 2.1 2.6 4.1 2.6H20M3 17h3.2c1.3 0 2.2-.4 3-1.2M14.2 8.2c.8-.8 1.7-1.2 3-1.2H20M17.5 4.5 20 7l-2.5 2.5M17.5 14.5 20 17l-2.5 2.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+const PIN_SVG = `<svg viewBox="0 0 24 24" aria-hidden="true"><path class="pin-head" d="M9 3.5h6l-1 5.5 3.5 4h-11L10 9z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M12 13v7.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>`;
+
+/** Pins a folder to the top of the list (pin false: back in its place), on every device: pinned.json. */
+async function setPinned(folder, pin, name) {
+  const done = library.pinned.write([folder.toLowerCase()], pin, (cur) => withPinned(cur, folder, pin),
+    `${pin ? "Pin" : "Unpin"} ${folder || "the top level"} in the app's list`);
+  drawLibrary();
+  try {
+    await done;
+    toast(pin ? `Pinned “${name}” to the top.` : `Unpinned “${name}”.`);
+  } catch (err) {
+    toast(`Couldn't ${pin ? "pin" : "unpin"} “${name}”: ${err.message}`);
+  }
+  drawLibrary();
+}
+
+// ---------------------------------------------------------------- played files
+// A file counts as played once it starts playing; the library marks the others New. played.json in
+// the repository has the files played on any device (by content hash). A file played here waits in
+// this device's queue until GitHub has it (offline, it goes later). The first time, the lectures
+// this device played before are queued too: its records with a position, found in the library by
+// their Dropbox file or by their video.
+const PLAYED_QUEUE = "played:queue";   // {seeded, items: [{hash, name, path}]} on the device
+const playedQueue = new Map();
+let playedSeeded = false, sendingPlayed = null;
+const playedReady = store.getFile(PLAYED_QUEUE).then((q) => {
+  for (const it of q?.items || []) playedQueue.set(it.hash, it);
+  playedSeeded = !!q?.seeded;
+});
+const keepPlayedQueue = () => store.putFile(PLAYED_QUEUE, { seeded: playedSeeded, items: [...playedQueue.values()] });
+/** The library file playing now: streamed from Dropbox, or a copy of one (the same video). */
+function playingFile() {
+  const d = S.picked?.dropbox, fp = S.picked?.fingerprint;
+  if (d?.hash) return { hash: d.hash, name: S.videoName, path: d.path };
+  const it = fp && library.items.find((i) => i.entry?.fingerprint === fp);
+  return it ? { hash: it.hash, name: it.name, path: it.path } : null;
+}
+async function queuePlayed(items) {
+  await playedReady;
+  const fresh = items.filter((it) => it?.hash && !playedQueue.has(it.hash) && !library.played.has(it.hash));
+  if (!fresh.length) return;
+  for (const it of fresh) playedQueue.set(it.hash, it);
+  await keepPlayedQueue();
+  sharePlayed();
+}
+/** Sends the queue to played.json, one send at a time; what fails stays queued for the next listing. */
+async function sharePlayed() {
+  await playedReady;
+  if (!playedSeeded && library.items.length && library.played.known) await seedPlayed();
+  if (!gh || sendingPlayed || !playedQueue.size) return;
+  const items = [...playedQueue.values()];
+  sendingPlayed = library.played.write(items.map((it) => it.hash), true, (cur) => withPlayed(cur, items),
+    items.length === 1 ? `Played ${items[0].name}` : `Played ${items.length} files`);
+  try {
+    await sendingPlayed;
+    for (const it of items) playedQueue.delete(it.hash);
+    await keepPlayedQueue();
+  } catch { /* stays queued */ } finally {
+    sendingPlayed = null;
+  }
+  if (playedQueue.size && items.every((it) => !playedQueue.has(it.hash))) sharePlayed();   // played meanwhile
+}
+/** Queues, once per device, the lectures it played before: its records with a position. */
+async function seedPlayed() {
+  playedSeeded = true;
+  const byHash = new Map(library.items.map((i) => [i.hash, i]));
+  const byVideo = new Map(library.items.filter((i) => i.entry?.fingerprint).map((i) => [i.entry.fingerprint, i]));
+  for (const r of await store.list()) {
+    const it = r.position > 0 && (byHash.get(r.dropbox?.hash) || byVideo.get(r.video?.fingerprint));
+    if (it && !library.played.has(it.hash)) playedQueue.set(it.hash, { hash: it.hash, name: it.name, path: it.path });
+  }
+  await keepPlayedQueue();
+  if (player.hidden) drawLibrary();
+}
 
 // ---------------------------------------------------------------- deleting files from Dropbox
 // Select, tap the files, Delete, and confirm. Dropbox keeps deleted files for at least 30 days
@@ -335,23 +464,17 @@ $("libHide").addEventListener("click", () => {
  *  repository. They stay in Dropbox. The toast's Undo reverses it. */
 async function setHidden(items, hide) {
   const n = items.length, what = n === 1 ? `“${items[0].name}”` : `${n} files`;
-  const mark = (on) => { for (const it of items) (on ? library.hidden.add(it.hash) : library.hidden.delete(it.hash)); };
-  mark(hide);
-  library.hiding++;
-  library.hiddenAt = Infinity;
+  const done = library.hidden.write(items.map((it) => it.hash), hide, (cur) => withHidden(cur, items, hide),
+    `${hide ? "Hide" : "Unhide"} ${n === 1 ? items[0].name : `${n} files`} in the app's list`);
   picking.on = false;
   picking.paths.clear();
   drawLibrary();
   try {
-    const data = await gh.update(HIDDEN_FILE, (cur) => withHidden(cur, items, hide),
-      `${hide ? "Hide" : "Unhide"} ${n === 1 ? items[0].name : `${n} files`} in the app's list`);
-    if (library.hiding === 1) library.hidden = hiddenHashes(data);   // as GitHub has it, other devices' changes too
+    await done;
     toast(hide ? `Hid ${what} from the list.` : `${what} ${n === 1 ? "is" : "are"} back in the list.`, "Undo", () => setHidden(items, !hide));
   } catch (err) {
-    mark(!hide);
     toast(`Couldn't ${hide ? "hide" : "unhide"} ${what}: ${err.message}`);
   } finally {
-    if (--library.hiding === 0) library.hiddenAt = Date.now();
     drawLibrary();
   }
 }
@@ -733,6 +856,10 @@ function showVideo(picked, resumeAt = 0) {
   if (S.videoUrl?.startsWith("blob:")) URL.revokeObjectURL(S.videoUrl);
   S.videoUrl = picked.file ? URL.createObjectURL(picked.file) : picked.url;
   Object.assign(S, { picked, videoName: name, swapping: false, playing: false });
+  setNotesOpen(false);   // they belong to the lecture before
+  noteInput.value = "";
+  noteInput.style.height = "";
+  draftAt = null;
   corsFor(picked);
   video.src = S.videoUrl;
   applyRate(prefs.rate);
@@ -826,6 +953,7 @@ async function linkToRepo() {
       save();
     }
     if (S.id === id) await syncFixes();
+    if (S.id === id) await syncNotes();
   } catch (err) {
     if (err.kind !== "offline") toast(`Not saved to GitHub: ${err.message}`);
   }
@@ -1253,6 +1381,7 @@ function layout() {
   if (player.hidden || a.w <= 0 || a.h <= 0) return;
   const o = orient();
   player.style.setProperty("--video-size", `${Math.round(videoShare(o, a) * (o === "landscape" ? a.w : a.h))}px`);
+  player.style.setProperty("--bar-h", `${bar.offsetHeight}px`);   // the notes reach down to the bar
   if ($("settings").open) syncSplitControls();
 }
 new ResizeObserver(layout).observe(player);
@@ -1481,6 +1610,7 @@ video.textTracks.addEventListener?.("addtrack", captionsOff);
 const togglePlay = () => (video.paused ? video.play().catch(() => {}) : video.pause());
 $("playBtn").addEventListener("click", togglePlay);
 video.addEventListener("play", () => { S.playing = true; $("playBtn").textContent = "❚❚"; $("playBtn").ariaLabel = "Pause"; keepAwake(true); });
+video.addEventListener("playing", () => queuePlayed([playingFile()]));
 video.addEventListener("pause", () => {
   if (!S.swapping) S.playing = false;
   $("playBtn").textContent = "▶︎";
@@ -1509,7 +1639,10 @@ function setEditing(on) {
 const fmtRate = (r) => `${+r.toFixed(2)}×`;
 const fmtOffset = (ms) => `${ms > 0 ? "+" : ms < 0 ? "−" : "±"}${+Math.abs(ms / 1000).toFixed(2)} s`;
 function updateChips() {
-  $("speedBtn").textContent = fmtRate(video.playbackRate);
+  const r = video.playbackRate;
+  $("speedBtn").textContent = fmtRate(r);
+  $("barSlower").disabled = r <= RATE_MIN + 1e-9;
+  $("barFaster").disabled = r >= RATE_MAX - 1e-9;
   $("leadBtn").textContent = prefs.offsetOn ? fmtOffset(prefs.offsetMs) : "Exact";
   $("leadBtn").setAttribute("aria-pressed", String(prefs.offsetOn));
 }
@@ -1527,9 +1660,12 @@ addEventListener("keydown", (e) => {
   else if (k === "arrowright") skip(5);
   else if (k === "arrowup" || k === "]") stepRate(1);
   else if (k === "arrowdown" || k === "[") stepRate(-1);
+  else if (k === "-" || k === "_") nudgeRate(-1);
+  else if (k === "+" || k === "=") nudgeRate(1);
   else if (k === "l") $("leadBtn").click();
   else if (k === "h") $("hiBtn").click();
   else if (k === "e") $("editBtn").click();
+  else if (k === "n") $("notesBtn").click();
   else if (k === "f" && canFullscreen) $("fsBtn").click();
   else return;
   e.preventDefault();
@@ -1549,10 +1685,10 @@ panel.addEventListener("click", (e) => {
 // Two rows of parts (data-el in index.html), arranged by the viewer and kept on this device:
 // Settings → Arrange the buttons, then tap a part and move it. Settings itself can't be hidden,
 // so the bar can always be arranged again.
-const BAR_DEFAULT = { rows: [["progress", "highlight", "lock", "fullscreen"],
-  ["back", "rewind", "play", "forward", "speed", "timing", "fix", "settings"]], hidden: [] };
+const BAR_DEFAULT = { rows: [["progress", "highlight", "timing", "notes", "lock", "fullscreen"],
+  ["back", "rewind", "play", "forward", "speed", "fix", "settings"]], hidden: [] };
 const BAR_LABELS = { progress: "Progress bar", highlight: "Soft highlight", lock: "Lock", back: "Back", rewind: "−5s", play: "Play",
-  forward: "+5s", speed: "Speed", timing: "Timing", fix: "Fix", settings: "Settings", fullscreen: "Full screen" };
+  forward: "+5s", speed: "Speed", timing: "Timing", fix: "Fix", settings: "Settings", fullscreen: "Full screen", notes: "Notes" };
 // Kept here, not looked up: a part taken out of the bar is detached for a moment and couldn't be found.
 const PARTS = new Map([...bar.querySelectorAll("[data-el]")].map((el) => [el.dataset.el, el]));
 const barPart = (id) => PARTS.get(id);
@@ -1756,8 +1892,8 @@ function applyRate(r) {
   savePrefs();
   return true;
 }
-// − and + step 0.05× (from a typed speed between two steps, to the nearer step that way); the arrow
-// keys in the dialog do the same, and Page Up/Down jump to the next preset.
+// − and + step 0.05× (from a typed speed between two steps, to the nearer step that way), in the bar
+// and in the dialog; the arrow keys in the dialog do the same, and Page Up/Down jump to the next preset.
 $("speedPreset").append(new Option("Custom", ""), ...RATE_PRESETS.map((r) => new Option(fmtRate(r), String(r))));
 function nudgeRate(dir) {
   const k = video.playbackRate * 20;   // in 0.05× steps
@@ -1773,6 +1909,8 @@ function syncSpeedControls() {
 $("speedBtn").addEventListener("click", () => { syncSpeedControls(); $("speedDialog").showModal(); });
 $("speedDown").addEventListener("click", () => nudgeRate(-1));
 $("speedUp").addEventListener("click", () => nudgeRate(1));
+$("barSlower").addEventListener("click", () => nudgeRate(-1));
+$("barFaster").addEventListener("click", () => nudgeRate(1));
 $("speedDialog").addEventListener("keydown", (e) => {
   if (e.target === $("speedNum") || e.target === $("speedPreset")) return;   // they use the arrows themselves
   const dir = { ArrowRight: 1, ArrowUp: 1, ArrowLeft: -1, ArrowDown: -1 }[e.key];
@@ -1899,6 +2037,209 @@ function drawSyncNote() {
         : n ? `; ${n} change${n === 1 ? "" : "s"} waiting to sync.` : ", all on GitHub.");
 }
 
+// ---------------------------------------------------------------- notes
+// Text notes on a lecture, each at the moment of the video where its typing began. They show on a
+// layer over the video and subtitles (which show through), the newest first, under the box they are
+// typed in; a tap on a note's time goes there. A note swiped left is deleted (Undo in the toast),
+// one swiped right is edited in place. Kept per lecture like fixes: rec.notes on the device, and
+// notes/<key>.json in the repository for every device. Changes made here wait in rec.notesPending
+// until GitHub has them and are applied to GitHub's latest notes (core/notes.js).
+const notesLayer = $("notes"), noteInput = $("noteInput");
+let draftAt = null;        // where the note being typed was begun (ms into the video), null while the box is empty
+let noteEditing = null;    // the note being edited in place: the list waits to be drawn again
+const videoMs = () => Math.round(video.currentTime * 1000);
+function setNotesOpen(on) {
+  if (on && !S.id) return toast("Notes come with the transcript: this lecture doesn't have one yet.");
+  notesLayer.hidden = !on;
+  $("notesBtn").setAttribute("aria-pressed", String(on));
+  if (!on) {
+    noteEditing = null;
+    if (notesLayer.contains(document.activeElement)) document.activeElement.blur();
+    return;
+  }
+  drawNotes();
+  drawNoteWhen();
+  syncNotes();   // what other devices added since
+  if (matchMedia("(pointer: fine)").matches) noteInput.focus();   // not on touch screens: the keyboard would cover the notes
+}
+$("notesBtn").addEventListener("click", () => setNotesOpen(notesLayer.hidden));
+$("notesClose").addEventListener("click", () => setNotesOpen(false));
+notesLayer.addEventListener("keydown", (e) => { if (e.key === "Escape" && !noteEditing) { e.preventDefault(); setNotesOpen(false); } });
+function drawNoteWhen() {
+  $("noteWhen").textContent = `At ${clock((draftAt ?? videoMs()) / 1000)}`;
+  $("noteWhen").classList.toggle("fixed", draftAt !== null);
+}
+video.addEventListener("timeupdate", () => { if (!notesLayer.hidden && draftAt === null) drawNoteWhen(); });
+/** The box grows with what is typed, up to five lines. */
+function fitNoteInput() {
+  noteInput.style.height = "auto";
+  noteInput.style.height = `${Math.min(noteInput.scrollHeight + 2, 5 * 22 + 20)}px`;
+}
+noteInput.addEventListener("input", () => {
+  draftAt = noteInput.value.trim() ? draftAt ?? videoMs() : null;
+  drawNoteWhen();
+  fitNoteInput();
+});
+const isEnter = (e) => e.key === "Enter" && !e.shiftKey && !e.isComposing && e.keyCode !== 229;   // Shift+Enter: a new line
+noteInput.addEventListener("keydown", (e) => {
+  if (!isEnter(e)) return;
+  e.preventDefault();
+  const text = noteInput.value.trim();
+  if (!text || !S.id) return;
+  const now = new Date().toISOString();
+  changeNote({ id: newNoteId(), at_ms: draftAt ?? videoMs(), text, created: now, updated: now });
+  noteInput.value = "";
+  draftAt = null;
+  drawNoteWhen();
+  fitNoteInput();
+});
+/** A note added, changed or deleted on this device: shown at once, then sent to GitHub. */
+function changeNote(note) {
+  S.rec.notes = applyNoteChanges(S.rec.notes, [note]);
+  if (gh && S.repoKey) S.rec.notesPending = [...(S.rec.notesPending || []), note];
+  else S.rec.notesSynced = false;   // goes to GitHub when this lecture is linked to it
+  save();
+  drawNotes();
+  syncNotes();
+}
+function deleteNote(note) {
+  const gone = { ...note, deleted: true, updated: noteStamp(note.updated) };
+  changeNote(gone);
+  toast("Note deleted", "Undo", () => {
+    const { deleted, ...back } = note;
+    if (S.rec.notes?.some((n) => n.id === note.id)) changeNote({ ...back, updated: noteStamp(gone.updated) });
+  });
+}
+function drawNotes() {
+  if (notesLayer.hidden) return;
+  drawNotesStatus();
+  if (noteEditing) return;   // drawn when the edit ends
+  const notes = shownNotes(S.rec.notes);
+  $("noteList").replaceChildren(...notes.map(noteRow));
+  $("notesEmpty").hidden = notes.length > 0;
+  $("notesHint").hidden = !notes.length;
+}
+function drawNotesStatus() {
+  const n = shownNotes(S.rec.notes).length, waiting = (S.rec.notesPending || []).length || S.rec.notesSynced === false;
+  const state = !gh ? "kept on this device" : !S.repoKey ? "on this device until the lecture is on GitHub"
+    : notesSyncing ? "syncing…" : S.rec.notesError ? `not synced: ${S.rec.notesError}` : waiting ? "waiting to sync" : n ? "on GitHub" : "";
+  $("notesStatus").textContent = [n && `${n} note${n === 1 ? "" : "s"}`, state].filter(Boolean).join(" · ");
+}
+function noteRow(note) {
+  const at = clock(note.at_ms / 1000), time = el("button", { type: "button", className: "note-time", textContent: at, ariaLabel: `Go to ${at}` });
+  time.addEventListener("click", () => { video.currentTime = note.at_ms / 1000; });
+  const body = el("div", { className: "note-body" }, time, el("span", { className: "note-text", textContent: note.text }));
+  const li = el("li", { className: "note", tabIndex: 0, ariaLabel: `${at}: ${note.text}. Delete key: delete it; Enter: edit it.` },
+    el("span", { className: "note-under edit", textContent: "Edit" }), el("span", { className: "note-under delete", textContent: "Delete" }), body);
+  li.addEventListener("keydown", (e) => {
+    if (e.target !== li) return;
+    if (e.key === "Delete" || e.key === "Backspace") deleteNote(note);
+    else if (e.key === "Enter") editNote(li, note);
+    else return;
+    e.preventDefault();
+  });
+  swipeable(li, body, note);
+  return li;
+}
+/** Swiping a note sideways: past SWIPE px to the left deletes it, to the right edits it; less
+ *  springs back. Up and down still scroll the list (touch-action: pan-y). */
+const SWIPE = 70;
+function swipeable(li, body, note) {
+  let start = null, dx = 0, swipedAt = 0;
+  const reset = () => {
+    start = null;
+    li.classList.remove("swiping", "left", "right", "past");
+    body.style.transform = "";
+  };
+  li.addEventListener("pointerdown", (e) => {
+    if (e.button > 0 || noteEditing) return;
+    start = { x: e.clientX, y: e.clientY, id: e.pointerId, on: false };
+    dx = 0;
+  });
+  li.addEventListener("pointermove", (e) => {
+    if (e.pointerId !== start?.id) return;
+    const x = e.clientX - start.x, y = e.clientY - start.y;
+    if (!start.on) {
+      if (Math.abs(y) > 12 && Math.abs(y) > Math.abs(x)) return reset();   // a scroll
+      if (Math.abs(x) < 12) return;
+      start.on = true;
+      try { li.setPointerCapture(e.pointerId); } catch { /* a pointer already gone: nothing to follow */ }
+      li.classList.add("swiping");
+    }
+    dx = x;
+    body.style.transform = `translateX(${dx}px)`;
+    li.classList.toggle("left", dx < 0);
+    li.classList.toggle("right", dx > 0);
+    li.classList.toggle("past", Math.abs(dx) >= SWIPE);
+  });
+  li.addEventListener("pointerup", (e) => {
+    if (e.pointerId !== start?.id) return;
+    const swiped = start.on;
+    reset();
+    if (!swiped) return;
+    swipedAt = Date.now();
+    if (dx <= -SWIPE) deleteNote(note);
+    else if (dx >= SWIPE) editNote(li, note);
+  });
+  li.addEventListener("pointercancel", (e) => { if (e.pointerId === start?.id) reset(); });
+  li.addEventListener("click", (e) => { if (Date.now() - swipedAt < 500) e.stopPropagation(); }, true);   // the end of a swipe isn't a tap
+}
+/** Edits a note in its place: Enter (or leaving the box) keeps the change, Escape doesn't; emptied, it is deleted. */
+function editNote(li, note) {
+  if (noteEditing) return;
+  noteEditing = note.id;
+  const box = el("textarea", { className: "note-edit", value: note.text, rows: Math.min(6, note.text.split("\n").length + 1),
+    enterKeyHint: "done", ariaLabel: "Edit the note" });
+  li.querySelector(".note-text").replaceWith(box);
+  box.focus();
+  box.setSelectionRange(box.value.length, box.value.length);
+  let done = false;
+  const finish = (keep) => {
+    if (done) return;
+    done = true;
+    noteEditing = null;
+    const text = box.value.trim();
+    if (keep && !text) deleteNote(note);
+    else if (keep && text !== note.text) changeNote({ ...note, text, updated: noteStamp(note.updated) });
+    else drawNotes();
+  };
+  box.addEventListener("keydown", (e) => {
+    if (isEnter(e)) finish(true);
+    else if (e.key === "Escape") finish(false);
+    else return;
+    e.preventDefault();
+    e.stopPropagation();
+  });
+  box.addEventListener("blur", () => finish(true));
+}
+let notesSyncing = null, notesAgain = false;
+function syncNotes() {
+  if (!gh || !S.repoKey || !S.id) return Promise.resolve(false);
+  if (notesSyncing) { notesAgain = true; return notesSyncing; }
+  const id = S.id, rec = S.rec, key = S.repoKey, name = S.videoName;
+  if (!rec.notesSynced && rec.notes?.length && !rec.notesPending?.length) rec.notesPending = rec.notes.slice();
+  const sent = (rec.notesPending || []).slice();
+  notesSyncing = gh.update(`notes/${key}.json`, (cur) => (sent.length
+    ? { video: name, notes: applyNoteChanges(cur?.notes, sent), updated: new Date().toISOString() } : undefined),
+  `Notes on ${name}`).then((data) => {
+    rec.notesPending = (rec.notesPending || []).slice(sent.length);
+    Object.assign(rec, { notesSynced: true, notesError: null });
+    rec.notes = applyNoteChanges(data?.notes, rec.notesPending);
+    if (S.id !== id) store.save(id, structuredClone(rec));
+    else save();
+    return true;
+  }).catch((err) => {
+    rec.notesError = err.kind === "offline" ? null : err.message;
+    return false;
+  }).finally(() => {
+    notesSyncing = null;
+    if (S.id === id) drawNotes();
+    if (notesAgain) { notesAgain = false; syncNotes(); }
+  });
+  drawNotes();
+  return notesSyncing;
+}
+
 // ---------------------------------------------------------------- settings
 function openSettings() {
   syncOffsetControls();
@@ -1935,6 +2276,7 @@ $("sync").addEventListener("change", save);
 $("language").addEventListener("change", () => { S.language = $("language").value; if (S.transcript) { rebuildLayout(); save(); } });
 function goHome() {
   if ($("settings").open) $("settings").close();
+  setNotesOpen(false);
   if (arranging) setArranging(false);
   if (!lockLayer.hidden) setLocked(false);
   video.pause();

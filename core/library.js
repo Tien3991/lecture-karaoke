@@ -63,15 +63,50 @@ export function mergeLibrary(files, videos) {
     .sort((a, b) => byName(a.folder, b.folder) || byName(a.name, b.name));
 }
 
-/** Items by folder, the top level first: [{folder, items}]. */
-export function groupByFolder(items) {
+/** Items by folder, the pinned folders (pinnedFolders) first, then the top level: [{folder, items, pinned}]. */
+export function groupByFolder(items, pinned = new Set()) {
   const groups = new Map();
   for (const it of items) {
     if (!groups.has(it.folder)) groups.set(it.folder, []);
     groups.get(it.folder).push(it);
   }
-  return [...groups].map(([folder, list]) => ({ folder, items: list }))
-    .sort((a, b) => (a.folder === "" ? -1 : b.folder === "" ? 1 : byName(a.folder, b.folder)));
+  return [...groups].map(([folder, list]) => ({ folder, items: list, pinned: pinned.has(folder.toLowerCase()) }))
+    .sort((a, b) => (b.pinned - a.pinned) || (a.folder === "" ? -1 : b.folder === "" ? 1 : byName(a.folder, b.folder)));
+}
+
+/** A random item to play: a transcribed one when the folder has any. */
+export function randomPick(items, random = Math.random) {
+  const ready = items.filter((i) => i.status === "ready"), from = ready.length ? ready : items;
+  return from.length ? from[Math.floor(random() * from.length)] : null;
+}
+
+// Files played on any device (the others are marked New): played.json in the repository, the same
+// shape as hidden.json, {version: 1, files: {<Dropbox content hash>: {name, path, played}}}.
+export const PLAYED_FILE = "played.json";
+export const playedHashes = (data) => new Set(Object.keys(data?.files || {}));
+
+/** played.json with these items played too, or undefined when they all were. */
+export function withPlayed(data, items, now = isoNow()) {
+  const files = { ...(data?.files || {}) };
+  let changed = false;
+  for (const it of items) {
+    if (it.hash && !files[it.hash]) { files[it.hash] = { name: it.name, path: it.path, played: now }; changed = true; }
+  }
+  return changed ? { ...(data || {}), version: 1, files } : undefined;
+}
+
+// Folders pinned to the top of the library: pinned.json in the repository,
+// {version: 1, folders: {<folder, in lower case>: {folder, pinned}}}.
+export const PINNED_FILE = "pinned.json";
+export const pinnedFolders = (data) => new Set(Object.keys(data?.folders || {}));
+
+/** pinned.json with this folder pinned (pin) or not, or undefined when it already is so. */
+export function withPinned(data, folder, pin, now = isoNow()) {
+  const folders = { ...(data?.folders || {}) }, key = folder.toLowerCase();
+  if (pin === !!folders[key]) return undefined;
+  if (pin) folders[key] = { folder, pinned: now };
+  else delete folders[key];
+  return { ...(data || {}), version: 1, folders };
 }
 
 // Files hidden from the list (they stay in Dropbox): hidden.json in the repository, shared by the

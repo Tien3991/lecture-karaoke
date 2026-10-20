@@ -12,8 +12,8 @@ import path from "node:path";
 import { createServer } from "../dev/serve.mjs";
 import { BLOCK, CHUNK, ContentHasher, Dropbox, contentHash } from "../core/dropbox.js";
 import { GitHub } from "../core/github.js";
-import { changedEntry, entryStatus, folderLanguage, groupByFolder, hiddenHashes, indexEntry, keyFor, mergeLibrary, searchLibrary,
-  shownFolder, withEntry, withHidden } from "../core/library.js";
+import { changedEntry, entryStatus, folderLanguage, groupByFolder, hiddenHashes, indexEntry, keyFor, mergeLibrary, pinnedFolders,
+  playedHashes, randomPick, searchLibrary, shownFolder, withEntry, withHidden, withPinned, withPlayed } from "../core/library.js";
 
 /** Dropbox's content hash computed with node:crypto, to check the browser code against. */
 function reference(buf) {
@@ -296,6 +296,37 @@ test("hiding: hidden.json knows files by content hash; hiding twice or showing w
   assert.deepEqual(withHidden(two, [a], false), { version: 1, files: { hb: two.files.hb } });
   assert.equal(withHidden(one, [b], false), undefined, "not hidden");
   assert.deepEqual(withHidden({ version: 1, files: {}, note: "kept" }, [b], true, "t3").note, "kept");
+});
+
+test("pinned folders come first; a random lecture; the files played on any device (the others are New)", () => {
+  const item = (folder, name, status = "ready") => ({ folder, name, path: `/${folder}/${name}`.replace("//", "/"), hash: `h ${folder}/${name}`, status });
+  const items = [item("", "Top.mp4"), item("Algebra", "1.mp4"), item("Calculus", "1.mp4"), item("Zoology", "1.mp4")];
+  assert.deepEqual(groupByFolder(items).map((g) => [g.folder, g.pinned]), [["", false], ["Algebra", false], ["Calculus", false], ["Zoology", false]]);
+  const one = withPinned(null, "Zoology", true, "t1");
+  assert.deepEqual(one, { version: 1, folders: { zoology: { folder: "Zoology", pinned: "t1" } } });
+  assert.equal(withPinned(one, "zoology", true, "t2"), undefined, "already pinned (folders as Dropbox knows them: any case)");
+  const two = withPinned(one, "Calculus", true, "t2");
+  assert.deepEqual(groupByFolder(items, pinnedFolders(two)).map((g) => [g.folder, g.pinned]),
+    [["Calculus", true], ["Zoology", true], ["", false], ["Algebra", false]], "pinned by name, then the top level and the rest");
+  assert.deepEqual(groupByFolder(items, pinnedFolders(withPinned(null, "", true))).map((g) => g.folder)[0], "", "the top level can be pinned too");
+  assert.deepEqual(withPinned(two, "ZOOLOGY", false), { version: 1, folders: { calculus: two.folders.calculus } });
+  assert.equal(withPinned(two, "Algebra", false), undefined, "not pinned");
+  assert.equal(withPinned({ version: 1, folders: {}, note: "kept" }, "A", true).note, "kept");
+
+  const folder = [item("C", "a.mp4", "pending"), item("C", "b.mp4"), item("C", "c.mp4", null), item("C", "d.mp4"), item("C", "e.mp4", "failed")];
+  assert.equal(randomPick(folder, () => 0).name, "b.mp4", "a lecture with its transcript");
+  assert.equal(randomPick(folder, () => 0.999).name, "d.mp4");
+  assert.equal(randomPick([folder[0], folder[2]], () => 0.6).name, "c.mp4", "any, when none has one");
+  assert.equal(randomPick([]), null);
+
+  assert.deepEqual([...playedHashes(null)], []);
+  const p1 = withPlayed(null, [items[1]], "t1");
+  assert.deepEqual(p1, { version: 1, files: { "h Algebra/1.mp4": { name: "1.mp4", path: "/Algebra/1.mp4", played: "t1" } } });
+  assert.equal(withPlayed(p1, [items[1]], "t2"), undefined, "played before: the first time is kept");
+  assert.equal(withPlayed(p1, [{ name: "Local.mp4", path: null, hash: undefined }], "t2"), undefined, "only Dropbox files (by content hash)");
+  const p2 = withPlayed(p1, [items[1], items[2]], "t2");
+  assert.deepEqual([...playedHashes(p2)], ["h Algebra/1.mp4", "h Calculus/1.mp4"]);
+  assert.equal(p2.files["h Algebra/1.mp4"].played, "t1");
 });
 
 test("dispatch: starts transcribe.yml on main with the item; a token without Actions access is refused", async () => {

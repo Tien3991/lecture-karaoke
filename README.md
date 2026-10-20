@@ -28,8 +28,8 @@ The three most recent lectures are listed under the pickers with where you stopp
 streams again; for a file on the device a browser can't reopen it by itself, so tapping one opens
 the file picker (its Recents has the video).
 
-The control bar has two rows: by default the progress bar, **Soft**, the lock and full screen on
-top, and the other buttons below. ⋯ Settings → *Arrange the buttons* lets you move any button left or right or to
+The control bar has two rows: by default the progress bar, **Soft**, **Exact**, notes, the lock and
+full screen on top, and the other buttons below. ⋯ Settings → *Arrange the buttons* lets you move any button left or right or to
 the other row, or hide it (tap a button, then move it); the arrangement is kept on the device. A
 button added in a later release appears where the default bar has it.
 
@@ -38,18 +38,29 @@ button added in a later release appears where the default bar has it.
 | `‹` | back to the start screen |
 | `−5s` / `+5s` | back / forward 5 seconds |
 | `▶︎` | play / pause (tapping the video does too) |
-| `1×` | playback speed, 0.2× to 4×: − and + change it by 0.05×, or type a value, or pick a preset |
+| `−` `1×` `+` | playback speed, 0.2× to 4×: − and + change it by 0.05× (they stay in place, so they can be tapped again); tap the number to type a value or pick a preset |
 | `Exact` / `+3 s` | switch between exact timing and the offset set in ⋯ Settings (+ before the voice, to read ahead; − after it) |
 | `Soft` | switch the highlight between full color and the soft setting in ⋯ Settings (lit while soft) |
 | lock | lock the screen against touches while the lecture plays: nothing under it reacts, and the bar dims. A touch shows *Slide to unlock*: slide the lock all the way to the right and let go there (stopping short, or wandering off the track, leaves it locked). The keyboard still works; on the slider, → moves it a quarter at a time |
 | `Fix` | tap a word to correct it (synced through GitHub when connected) |
+| notes (page icon) | notes on the lecture, below |
 | `⋯` | settings: links to the transcript, timing offset, sync fine-tune (±300 ms), layout, highlight, control bar, GitHub, language, the list of fixes, export |
 | `⛶` | full screen, where the browser allows it (not iPhone) |
 | handle between video and subtitles | drag to resize them; portrait and landscape are kept separately (double-click, or ⋯ Settings → Automatic, to reset) |
-| keyboard | space play/pause, ←/→ 5 s, ↑/↓ preset speeds, `L` offset, `H` soft highlight, `E` fix, `F` full screen |
+| keyboard | space play/pause, ←/→ 5 s, ↑/↓ preset speeds, `−`/`+` 0.05× slower/faster, `L` offset, `H` soft highlight, `E` fix, `N` notes, `F` full screen |
 
 The app remembers, per transcript, where you stopped, the sync fine-tune, the language and your
 fixes; speed, offset, layout and highlight are remembered on the device for every lecture.
+
+**Notes.** The notes button (or `N`) opens a layer over the video and subtitles, which show through
+it; the bar still works. Type a note in the box and press Enter (Shift+Enter starts a new line): it
+goes to the top of the list under the box, and the earlier notes move down. A note keeps the moment
+of the lecture where its typing began; tap its time to go there. Swipe a note left to delete it
+(*Undo* in the message brings it back), or right to edit it in place: Enter keeps the change,
+Escape doesn't, and a note emptied is deleted. With a keyboard, Tab to a note, then Delete or
+Enter. Notes are text only, kept per lecture and on every device (`notes/<key>.json` in the
+repository, synced like fixes; made offline, they wait). A lecture still waiting for its transcript
+can't have notes yet.
 
 ⋯ Settings → *Highlight* sets the color of the words already spoken. There are six colors that
 stand out on black (yellow, as in the burned videos, is the default), or pick any other color.
@@ -74,7 +85,12 @@ Once GitHub is connected and the repository has `config/dropbox.json` (`{"app_ke
 Apps/Lecture Karaoke; approved once on the Mac with `vvm.py dropbox-auth`), the start screen lists,
 under the recent lectures, the videos and recordings in that folder, a section
 per course subfolder, with search and a badge each: *Ready*, *Transcribing*, *Not transcribed* or
-*Failed*. A long name takes two lines. A tap streams the file (a temporary link, renewed before
+*Failed*. A long name takes two lines. A file not played yet on any device is marked **New**
+(`played.json` in the repository; a file counts as played once it starts playing, and each device
+adds, the first time, the lectures it played before). Each folder's header has two
+buttons: the crossed arrows play a random lecture from the folder (one with a transcript, when it
+has any; while searching, one of those found), and the pin keeps the folder at the top of the list
+on every device (`pinned.json`); pinned folders come first, by name. A tap streams the file (a temporary link, renewed before
 its 4 hours are up, or at once if it stops on an expired link, keeping the position). Files put in
 Dropbox from any device are transcribed by the job, `.github/workflows/transcribe.yml` in the
 repository: on its schedule, or right away with *Check now*.
@@ -148,9 +164,15 @@ Connect once per device (start screen → *Connect GitHub*, or ⋯ Settings): th
 - `fixes/<key>.json` holds word fixes made in the app, `{"fixes": [{start_ms, old, new}]}`. Each
   device sends its changes and merges them with what is there, so fixes from several devices are
   all kept; offline changes wait and sync later. The pipeline applies them when it renders.
+- `notes/<key>.json` holds the notes on a lecture, `{"video", "notes": [{id, at_ms, text, created,
+  updated, deleted?}]}` (`at_ms`: the moment of the video). Each change made on a device is the
+  note's new state, merged with what is there: of two changes to one note the later wins, and a
+  deleted note stays as a marker, so an older copy can't bring it back.
 - `hidden.json` holds the files hidden from the library, `{"version": 1, "files": {<Dropbox content
   hash>: {name, path, hidden}}}`. Known by content, a file moved or renamed in Dropbox stays
-  hidden. The transcription job doesn't read it.
+  hidden. `played.json` is the same for the files played on any device (`played`: the first time),
+  and `pinned.json` lists the pinned folders, `{"version": 1, "folders": {<folder in lower case>:
+  {folder, pinned}}}`. The transcription job reads none of these.
 - Transcripts and the index are kept on the device too, so opened lectures work offline.
 
 A transcript is either the transcript JSON from the Soniox API (`GET

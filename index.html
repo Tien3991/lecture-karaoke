@@ -7,7 +7,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Karaoke">
-<meta name="app-version" content="2.7.0">
+<meta name="app-version" content="2.8.0">
 <meta name="description" content="Plays your lecture videos and audio recordings, from your device or your Dropbox, with live karaoke subtitles from their Soniox transcripts; new ones get transcribed on GitHub.">
 <title>Lecture Karaoke</title>
 <link rel="manifest" href="manifest.webmanifest">
@@ -108,15 +108,29 @@
       <button id="rewindBtn" class="icon" data-el="rewind" aria-label="Back 5 seconds">−5s</button>
       <button id="playBtn" class="icon play" data-el="play" aria-label="Play">▶︎</button>
       <button id="forwardBtn" class="icon" data-el="forward" aria-label="Forward 5 seconds">+5s</button>
-      <button id="speedBtn" class="chip" data-el="speed" aria-label="Playback speed" aria-haspopup="dialog">1×</button>
+      <span class="speed-group" data-el="speed"><button id="barSlower" class="icon step" aria-label="Slower (−0.05×)">−</button><button id="speedBtn" class="chip" aria-label="Playback speed" aria-haspopup="dialog">1×</button><button id="barFaster" class="icon step" aria-label="Faster (+0.05×)">+</button></span>
       <button id="leadBtn" class="chip" data-el="timing" aria-pressed="false" aria-label="Subtitle timing: exact, or the offset set in Settings">Exact</button>
       <button id="hiBtn" class="chip" data-el="highlight" aria-pressed="false" aria-label="Soft highlight, set in Settings">Soft</button>
+      <button id="notesBtn" class="icon" data-el="notes" aria-pressed="false" aria-label="Notes"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4.5" y="3" width="15" height="18" rx="2.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8.5 8.5h7M8.5 12.5h7M8.5 16.5h4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button>
       <button id="editBtn" class="chip" data-el="fix" aria-pressed="false">Fix</button>
       <button id="moreBtn" class="icon" data-el="settings" aria-label="Settings">⋯</button>
       <button id="lockBtn" class="icon" data-el="lock" aria-label="Lock the screen against touches"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 11V8a4 4 0 0 1 8 0v3" fill="none" stroke="currentColor" stroke-width="2.2"/><rect x="5" y="11" width="14" height="10" rx="2.5" fill="currentColor"/></svg></button>
       <button id="fsBtn" class="icon" data-el="fullscreen" aria-label="Full screen">⛶</button>
     </div>
   </div>
+  <!-- Notes on this lecture (app.js, notes): a layer over the video and subtitles, which show through; the bar stays usable. -->
+  <section id="notes" class="notes" aria-label="Notes" hidden>
+    <div class="notes-head">
+      <h2>Notes</h2>
+      <span id="notesStatus" class="notes-status" role="status"></span>
+      <button type="button" id="notesClose" class="notes-close" aria-label="Close the notes">✕</button>
+    </div>
+    <label class="note-new"><span id="noteWhen" class="note-when">At 0:00</span>
+      <textarea id="noteInput" rows="1" enterkeyhint="send" placeholder="Type a note; Enter adds it" autocapitalize="sentences"></textarea></label>
+    <p id="notesEmpty" class="notes-empty">No notes yet. Each note keeps the moment it was begun at: tap its time to go back there.</p>
+    <ul id="noteList" class="note-list" aria-label="Notes, the newest first"></ul>
+    <p id="notesHint" class="notes-hint">Swipe a note left to delete it, right to edit it. Tap its time to go there.</p>
+  </section>
   <!-- Touch lock (app.js setLocked): covers the player so nothing takes a touch; the lock has to be slid to the right. -->
   <div id="lock" class="lock" hidden>
     <div id="unlock" class="unlock">
