@@ -38,7 +38,7 @@ button added in a later release appears where the default bar has it.
 | `‹` | back to the start screen |
 | `−5s` / `+5s` | back / forward 5 seconds |
 | `▶︎` | play / pause (tapping the video does too) |
-| `−` `1×` `+` | playback speed, 0.2× to 4×: − and + change it by 0.05× (they stay in place, so they can be tapped again); tap the number to type a value or pick a preset |
+| `−` `1×` `+` | playback speed, 0.2× to 4×: − and + change it by 0.05× (they stay in place, so they can be tapped again); tap the number to type a value or pick a preset. Each Dropbox folder keeps its own speed |
 | `Exact` / `+3 s` | switch between exact timing and the offset set in ⋯ Settings (+ before the voice, to read ahead; − after it) |
 | `Soft` | switch the highlight between full color and the soft setting in ⋯ Settings (lit while soft) |
 | lock | lock the screen against touches while the lecture plays: nothing under it reacts, and the bar dims. A touch shows *Slide to unlock*: slide the lock all the way to the right and let go there (stopping short, or wandering off the track, leaves it locked). The keyboard still works; on the slider, → moves it a quarter at a time |
@@ -50,7 +50,15 @@ button added in a later release appears where the default bar has it.
 | keyboard | space play/pause, ←/→ 5 s, ↑/↓ preset speeds, `−`/`+` 0.05× slower/faster, `L` offset, `H` soft highlight, `E` fix, `N` notes, `F` full screen |
 
 The app remembers, per transcript, where you stopped, the sync fine-tune, the language and your
-fixes; speed, offset, layout and highlight are remembered on the device for every lecture.
+fixes; speed, offset, layout and highlight are remembered on the device for every lecture. The
+speed is kept per Dropbox folder: a lecture opens at the speed last chosen for its folder (a folder
+without one, or a file not in Dropbox, at the speed chosen last anywhere).
+
+**Next lecture.** When a lecture from Dropbox ends, a card offers the next one in its folder (in the
+library's order; hidden files are passed over): **Play next** opens and plays it, *Stay here*
+closes the card. Tick *Play the next one by itself* (on the card, or ⋯ Settings → *Next lecture*;
+kept on the device) and it starts after 5 seconds unless you tap *Stay here*. After a folder's last
+lecture there is no card.
 
 **Notes.** The notes button (or `N`) opens a layer over the video and subtitles, which show through
 it; the bar still works. Type a note in the box and press Enter (Shift+Enter starts a new line): it
@@ -87,10 +95,13 @@ under the recent lectures, the videos and recordings in that folder, a section
 per course subfolder, with search and a badge each: *Ready*, *Transcribing*, *Not transcribed* or
 *Failed*. A long name takes two lines. A file not played yet on any device is marked **New**
 (`played.json` in the repository; a file counts as played once it starts playing, and each device
-adds, the first time, the lectures it played before). Each folder's header has two
+adds, the first time, the lectures it played before). Each folder's header has three
 buttons: the crossed arrows play a random lecture from the folder (one with a transcript, when it
-has any; while searching, one of those found), and the pin keeps the folder at the top of the list
-on every device (`pinned.json`); pinned folders come first, by name. A tap streams the file (a temporary link, renewed before
+has any; while searching, one of those found); the arrow down saves the transcripts of the
+lectures listed in one ZIP (each as `.txt`, a sentence per line, and `.json`, with word timings,
+with the word fixes on GitHub and the device's, plus *All transcripts.txt* with all the text, a
+`#` heading per lecture; on a phone **Save ZIP** opens the share sheet); and the pin keeps the
+folder at the top of the list on every device (`pinned.json`); pinned folders come first, by name. A tap streams the file (a temporary link, renewed before
 its 4 hours are up, or at once if it stops on an expired link, keeping the position). Files put in
 Dropbox from any device are transcribed by the job, `.github/workflows/transcribe.yml` in the
 repository: on its schedule, or right away with *Check now*.

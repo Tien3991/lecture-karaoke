@@ -74,6 +74,18 @@ export function groupByFolder(items, pinned = new Set()) {
     .sort((a, b) => (b.pinned - a.pinned) || (a.folder === "" ? -1 : b.folder === "" ? 1 : byName(a.folder, b.folder)));
 }
 
+/** The lecture after `current` in its folder, in the library's order (by name, numbers in order),
+ *  passing over those skip() says to; null after the last. items: mergeLibrary's list. */
+export function nextInFolder(items, current, skip = () => false) {
+  const i = items.findIndex((it) => it.path === current.path);
+  if (i < 0) return null;
+  for (const it of items.slice(i + 1)) {
+    if (it.folder !== current.folder) return null;
+    if (!skip(it)) return it;
+  }
+  return null;
+}
+
 /** A random item to play: a transcribed one when the folder has any. */
 export function randomPick(items, random = Math.random) {
   const ready = items.filter((i) => i.status === "ready"), from = ready.length ? ready : items;

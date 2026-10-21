@@ -13,13 +13,14 @@ import { GitHub } from "./core/github.js";
 import { Dropbox, LINK_MS, contentHash } from "./core/dropbox.js";
 import { extractAdts } from "./core/audio.js";
 import { HIDDEN_FILE, PINNED_FILE, PLAYED_FILE, STAGING, changedEntry, entryStatus, folderLanguage, folderOf, groupByFolder, hiddenHashes,
-  indexEntry, isoNow, keyFor, mergeLibrary, pinnedFolders, playedHashes, randomPick, searchLibrary, shownFolder, withEntry, withHidden,
-  withPinned, withPlayed } from "./core/library.js";
+  indexEntry, isoNow, keyFor, mergeLibrary, nextInFolder, pinnedFolders, playedHashes, randomPick, searchLibrary, shownFolder, withEntry,
+  withHidden, withPinned, withPlayed } from "./core/library.js";
 import { applyDeltas, deltaFor, sameFixes } from "./core/sync.js";
 import { applyNoteChanges, newNoteId, noteStamp, shownNotes } from "./core/notes.js";
 import * as store from "./core/store.js";
+import { zipFiles } from "./core/zip.js";
 
-const VERSION = "2.8.0";
+const VERSION = "2.9.0";
 // Proportions of the burned vertical video (identical in every pipeline calibration), in em of
 // the main subtitle text: line limit, frame width, and the height the three blocks need.
 const FIT_EM = 892.4 / 67.797, FRAME_EM = 1080 / 67.797, PANEL_EM = 14.4, CTX_SCALE = 74 / 93;
@@ -65,9 +66,11 @@ const S = {
 };
 
 // ---------------------------------------------------------------- viewer preferences
-// Kept on this device for every lecture: speed, the timing offset and whether it is on, the
-// video/subtitle split for each orientation, and the highlight (its color, the soft setting and
-// whether it is on). (Position, sync, language and fixes are kept per transcript in IndexedDB.)
+// Kept on this device for every lecture: speed (and each Dropbox folder's own, folderRates, by the
+// folder in lower case), the timing offset and whether it is on, the video/subtitle split for each
+// orientation, the highlight (its color, the soft setting and whether it is on), and whether the
+// next lecture plays by itself (autoNext). (Position, sync, language and fixes are kept per
+// transcript in IndexedDB.)
 // The key carries the app prefix: all Pages projects share one origin.
 const PREFS_KEY = "lecture-karaoke.prefs";
 // Highlight presets, readable on black; yellow is the burned videos' color.
@@ -75,8 +78,8 @@ const HI_COLORS = [["Yellow", "#ffe000"], ["Orange", "#fb923c"], ["Green", "#4ad
   ["Violet", "#a78bfa"]];
 // The soft highlight keeps this % of the color, the rest the white of the words to come.
 const HI_SOFT_RANGE = [20, 90], HI_SOFT_DEFAULT = 40;
-const prefs = { rate: 1, offsetMs: 3000, offsetOn: false, split: { portrait: null, landscape: null }, bar: null, uploadFolder: "Uploads",
-  hi: { color: HI_COLORS[0][1], soft: false, strength: HI_SOFT_DEFAULT } };
+const prefs = { rate: 1, folderRates: {}, offsetMs: 3000, offsetOn: false, split: { portrait: null, landscape: null }, bar: null,
+  uploadFolder: "Uploads", hi: { color: HI_COLORS[0][1], soft: false, strength: HI_SOFT_DEFAULT }, autoNext: false };
 try {
   const saved = JSON.parse(localStorage.getItem(PREFS_KEY) || "{}");
   Object.assign(prefs, saved, { split: { ...prefs.split, ...saved.split } });
@@ -84,6 +87,9 @@ try {
   if (oldRate && !("rate" in saved)) prefs.rate = oldRate;
 } catch { /* storage unavailable: defaults */ }
 prefs.rate = clamp(Number(prefs.rate) || 1, RATE_MIN, RATE_MAX);
+prefs.folderRates = Object.fromEntries(Object.entries(Object(prefs.folderRates))
+  .filter(([, r]) => Number.isFinite(r) && r >= RATE_MIN && r <= RATE_MAX));
+prefs.autoNext = prefs.autoNext === true;
 prefs.offsetMs = Number.isFinite(Number(prefs.offsetMs)) ? clamp(Number(prefs.offsetMs), -OFFSET_MAX_MS, OFFSET_MAX_MS) : 3000;
 prefs.offsetOn = prefs.offsetOn === true;
 for (const o of ["portrait", "landscape"]) if (!Number.isFinite(prefs.split[o])) prefs.split[o] = null;
@@ -284,6 +290,8 @@ function loadLibrary() {
   return library.loading;
 }
 const mb = (bytes) => `${bytes >= 1e9 ? (bytes / 1e9).toFixed(1) : Math.max(1, Math.round(bytes / 1e6))} ${bytes >= 1e9 ? "GB" : "MB"}`;
+/** A folder's name as the library shows it: without its language mark; the top level is the app's. */
+const folderTitle = (folder) => shownFolder(folder) || folder || "Lecture Karaoke";
 /** The files of the view on screen: the hidden ones, or all the others. */
 const inView = () => library.items.filter((i) => library.hidden.has(i.hash) === (library.view === "hidden"));
 /** Never played on any device (known once played.json has been read). */
@@ -306,7 +314,7 @@ function drawLibrary() {
   $("libList").replaceChildren(...groups.map((g) => {
     const d = Object.assign(document.createElement("details"), { className: "lib-folder", open: !!q || groups.length === 1 || openFolders.has(g.folder) });
     d.addEventListener("toggle", () => { if (!$("libSearch").value.trim()) (d.open ? openFolders.add(g.folder) : openFolders.delete(g.folder)); });
-    const summary = document.createElement("summary"), name = shownFolder(g.folder) || g.folder || "Lecture Karaoke";
+    const summary = document.createElement("summary"), name = folderTitle(g.folder);
     summary.append(name, Object.assign(document.createElement("span"), { className: "lib-count", textContent: ` ${g.items.length}` }));
     const ul = Object.assign(document.createElement("ul"), { className: "lib-items" });
     ul.append(...g.items.map((it) => {
@@ -331,7 +339,7 @@ function drawLibrary() {
     d.append(summary, ul);
     if (!withTools) return d;
     // Beside the folder's name, not in it (a button inside <summary> would open and close the folder):
-    // a random lecture from the folder, and the pin.
+    // a random lecture from the folder, its transcripts in one ZIP, and the pin.
     const group = Object.assign(document.createElement("div"), { className: "lib-group" });
     const tools = Object.assign(document.createElement("div"), { className: "lib-tools" });
     const tool = (label, svg, act) => {
@@ -341,7 +349,12 @@ function drawLibrary() {
     };
     const pin = tool(g.pinned ? `Unpin “${name}”` : `Pin “${name}” to the top`, PIN_SVG, () => setPinned(g.folder, !g.pinned, name));
     pin.setAttribute("aria-pressed", String(g.pinned));
-    tools.append(tool(`Play a random lecture from “${name}”`, SHUFFLE_SVG, () => { const it = randomPick(g.items); if (it) openFromDropbox(it); }), pin);
+    tools.append(tool(`Play a random lecture from “${name}”`, SHUFFLE_SVG, () => { const it = randomPick(g.items); if (it) openFromDropbox(it); }));
+    if (g.items.some((i) => i.status === "ready")) {
+      tools.append(tool(`Download the transcripts of “${name}”`, DOWNLOAD_SVG, () => downloadFolder(g.folder, g.items)));
+    }
+    tools.append(pin);
+    group.style.setProperty("--tools", tools.children.length);
     group.append(d, tools);
     return group;
   }));
@@ -349,6 +362,7 @@ function drawLibrary() {
 }
 $("libSearch").addEventListener("input", drawLibrary);
 const SHUFFLE_SVG = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7h3.2c2 0 3.1 1 4.1 2.6l2.6 4.8c1 1.6 2.1 2.6 4.1 2.6H20M3 17h3.2c1.3 0 2.2-.4 3-1.2M14.2 8.2c.8-.8 1.7-1.2 3-1.2H20M17.5 4.5 20 7l-2.5 2.5M17.5 14.5 20 17l-2.5 2.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+const DOWNLOAD_SVG = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v10.5M7.5 10 12 14.5 16.5 10M5 19.5h14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
 const PIN_SVG = `<svg viewBox="0 0 24 24" aria-hidden="true"><path class="pin-head" d="M9 3.5h6l-1 5.5 3.5 4h-11L10 9z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M12 13v7.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>`;
 
 /** Pins a folder to the top of the list (pin false: back in its place), on every device: pinned.json. */
@@ -364,6 +378,89 @@ async function setPinned(folder, pin, name) {
   }
   drawLibrary();
 }
+
+// ---------------------------------------------------------------- a folder's transcripts
+// A library folder's download button makes one ZIP of the transcripts of the lectures listed under
+// it (while searching, those found), with the word fixes on GitHub and this device's: for each, a
+// .txt (one sentence per line) and a .json (with word timings), as Settings → Transcript gives them,
+// and all the text in one file. Getting the transcripts takes a moment (4 at a time); then Save hands
+// the file over: on a phone the share sheet, which needs a fresh tap.
+let folderJob = null;   // {file, cancelled}
+async function downloadFolder(folder, items) {
+  const ready = items.filter((i) => i.status === "ready" && i.entry?.transcript), name = folderTitle(folder);
+  const job = folderJob = { file: null, cancelled: false };
+  $("folderTitle").textContent = `Transcripts of “${name}”`;
+  $("folderSays").textContent = `${ready.length} of the ${items.length} lecture${items.length === 1 ? "" : "s"} listed ` +
+    `${items.length === 1 ? "has" : "have"} a transcript. The ZIP has each as plain text (.txt, a sentence per line) and as JSON ` +
+    "(.json, with word timings), with your word fixes, and all the text in one file.";
+  Object.assign($("folderProgress"), { max: ready.length || 1, value: 0 });
+  $("folderStatus").textContent = "Getting the transcripts…";
+  $("folderSave").disabled = true;
+  $("folderDialog").showModal();
+  const recs = new Map((await store.list()).filter((r) => r.repoKey).map((r) => [r.repoKey, r]));
+  const got = new Array(ready.length), failed = [];
+  let next = 0, done = 0;
+  const worker = async () => {
+    while (next < ready.length && !job.cancelled) {
+      const i = next++;
+      try {
+        got[i] = await lectureTranscript(ready[i], recs.get(ready[i].entry.key));
+      } catch (err) {
+        failed.push(`${ready[i].name}: ${err.message}`);
+      }
+      done++;
+      if (folderJob !== job) continue;   // cancelled, or another folder's now
+      $("folderProgress").value = done;
+      $("folderStatus").textContent = `Getting the transcripts: ${done} of ${ready.length}…`;
+    }
+  };
+  await Promise.all(Array.from({ length: 4 }, worker));
+  if (job.cancelled) return;
+  const parts = got.filter(Boolean);
+  const zip = await zipFiles([{ name: "All transcripts.txt", data: parts.map((p) => `# ${p.base}\n\n${p.text}`).join("\n") },
+    ...parts.flatMap((p) => [{ name: `${p.base}.txt`, data: p.text }, { name: `${p.base}.json`, data: p.json }])]);
+  if (job.cancelled) return;
+  job.file = new File([zip], `${name.replaceAll("/", " - ")} - transcripts.zip`, { type: "application/zip" });
+  $("folderStatus").textContent = (parts.length ? `Ready: ${parts.length} transcript${parts.length === 1 ? "" : "s"}, ` +
+    `${zip.length < 1e6 ? `${Math.ceil(zip.length / 1e3)} KB` : mb(zip.length)}.` : "Nothing to save.") +
+    (failed.length ? ` ${failed.length} couldn't be read (${failed[0]}${failed.length > 1 ? ", …" : ""}).` : "");
+  $("folderSave").disabled = !parts.length;
+}
+/** One lecture's transcript as the files of the ZIP, with GitHub's fixes and this device's (rec). */
+async function lectureTranscript(it, rec) {
+  const text = await transcriptFile(`gh:${gh.repo}:${it.entry.transcript}`);
+  if (!text) throw new Error("it isn't on this device, and GitHub can't be reached");
+  const data = JSON.parse(text);
+  let fixes = [];
+  try {
+    fixes = JSON.parse((await repoFile(`fixes/${it.entry.key}.json`))?.text ?? "null")?.fixes ?? [];
+  } catch { /* offline: this device's only */ }
+  if (rec) fixes = applyDeltas(fixes, rec.synced ? rec.pending : rec.fixes);   // before its first sync, all of them
+  const words = applyFixes(wordsFromTranscript(data), fixes);
+  return { base: it.name.replace(/\.[^.]+$/, ""), text: transcriptText(words), json: JSON.stringify(exportTranscript(data, words, fixes, it.name)) };
+}
+$("folderSave").addEventListener("click", async () => {
+  const file = folderJob?.file;
+  if (!file) return;
+  if (isMobile && navigator.canShare?.({ files: [file] })) {
+    try {
+      await navigator.share({ files: [file], title: file.name });
+      $("folderDialog").close();
+      return;
+    } catch (err) {
+      if (err.name === "AbortError") return;
+    }
+  }
+  const a = Object.assign(document.createElement("a"), { href: URL.createObjectURL(file), download: file.name });
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+  $("folderDialog").close();
+});
+$("folderCancel").addEventListener("click", () => $("folderDialog").close());
+$("folderDialog").addEventListener("close", () => {
+  if (folderJob) folderJob.cancelled = true;
+  folderJob = null;
+});
 
 // ---------------------------------------------------------------- played files
 // A file counts as played once it starts playing; the library marks the others New. played.json in
@@ -855,14 +952,15 @@ function showVideo(picked, resumeAt = 0) {
   stream = null;
   if (S.videoUrl?.startsWith("blob:")) URL.revokeObjectURL(S.videoUrl);
   S.videoUrl = picked.file ? URL.createObjectURL(picked.file) : picked.url;
-  Object.assign(S, { picked, videoName: name, swapping: false, playing: false });
+  Object.assign(S, { picked, videoName: name, swapping: false, playing: false, folder: lectureFolder(picked) });
   setNotesOpen(false);   // they belong to the lecture before
+  hideUpNext();
   noteInput.value = "";
   noteInput.style.height = "";
   draftAt = null;
   corsFor(picked);
   video.src = S.videoUrl;
-  applyRate(prefs.rate);
+  applyRate((S.folder != null && prefs.folderRates[S.folder.toLowerCase()]) || prefs.rate, false);
   $("welcome").hidden = true;
   player.hidden = false;
   document.title = `${name.replace(/\.[^.]+$/, "")} · Lecture Karaoke`;
@@ -1878,8 +1976,9 @@ function flash(text) {
 }
 
 // ---------------------------------------------------------------- speed (0.2× to 4×)
-/** Sets the speed, or says so and returns false when this browser refuses it. */
-function applyRate(r) {
+/** Sets the speed, or says so and returns false when this browser refuses it. A speed the viewer
+ *  chose (remember) is kept for the lecture's Dropbox folder, and as the speed of folders without one. */
+function applyRate(r, remember = true) {
   r = Math.round(clamp(r, RATE_MIN, RATE_MAX) * 100) / 100;
   try {
     video.defaultPlaybackRate = r;
@@ -1888,9 +1987,18 @@ function applyRate(r) {
     toast(`This browser can't play at ${fmtRate(r)}.`);
     return false;
   }
+  if (!remember) return true;
   prefs.rate = r;
+  if (S.folder != null) prefs.folderRates[S.folder.toLowerCase()] = r;
   savePrefs();
   return true;
+}
+/** The Dropbox folder of the lecture opened (its speed is kept per folder), or null for a file on this
+ *  device that isn't in Dropbox. */
+function lectureFolder(picked) {
+  if (picked.dropbox?.path) return folderOf(picked.dropbox.path);
+  const it = picked.fingerprint && library.items.find((i) => i.entry?.fingerprint === picked.fingerprint);
+  return it ? it.folder : null;
 }
 // − and + step 0.05× (from a typed speed between two steps, to the nearer step that way), in the bar
 // and in the dialog; the arrow keys in the dialog do the same, and Page Up/Down jump to the next preset.
@@ -1905,6 +2013,8 @@ function syncSpeedControls() {
   $("speedPreset").value = RATE_PRESETS.includes(r) ? String(r) : "";
   $("speedDown").disabled = r <= RATE_MIN + 1e-9;
   $("speedUp").disabled = r >= RATE_MAX - 1e-9;
+  $("speedFor").textContent = S.folder == null ? "Kept on this device."
+    : `Kept on this device for the lectures in “${folderTitle(S.folder)}”; each folder keeps its own.`;
 }
 $("speedBtn").addEventListener("click", () => { syncSpeedControls(); $("speedDialog").showModal(); });
 $("speedDown").addEventListener("click", () => nudgeRate(-1));
@@ -2240,8 +2350,69 @@ function syncNotes() {
   return notesSyncing;
 }
 
+// ---------------------------------------------------------------- the next lecture
+// When a lecture from the Dropbox library ends, a card offers the next one in its folder (the
+// library's order; hidden files are passed over). With "Play the next one by itself" (kept on this
+// device, also in Settings) it starts after AUTO_NEXT_S seconds unless Stay here is tapped.
+const AUTO_NEXT_S = 5;
+let upNext = null;   // {item, left, timer}
+video.addEventListener("ended", () => {
+  const d = S.picked?.dropbox, fp = S.picked?.fingerprint;
+  const now = library.items.find((i) => (d?.path ? i.path === d.path : fp && i.entry?.fingerprint === fp));
+  const next = now && nextInFolder(library.items, now, (i) => library.hidden.has(i.hash));
+  if (next) showUpNext(next);
+});
+video.addEventListener("play", () => hideUpNext());
+function showUpNext(item) {
+  hideUpNext();
+  upNext = { item, left: AUTO_NEXT_S, timer: 0 };
+  $("upNextHead").textContent = `Next in “${folderTitle(item.folder)}”`;
+  $("upNextTitle").textContent = item.name.replace(/\.[^.]+$/, "");
+  $("upNextAuto").checked = prefs.autoNext;
+  $("upNext").hidden = false;
+  if (prefs.autoNext) countDown();
+  drawUpNext();
+}
+function countDown() {
+  clearInterval(upNext.timer);
+  upNext.left = AUTO_NEXT_S;
+  upNext.timer = setInterval(() => (--upNext.left > 0 ? drawUpNext() : playNext()), 1000);
+}
+function drawUpNext() {
+  $("upNextCount").textContent = upNext?.timer ? `Playing in ${upNext.left} s…` : "";
+}
+function hideUpNext() {
+  if (upNext) clearInterval(upNext.timer);
+  upNext = null;
+  $("upNext").hidden = true;
+}
+async function playNext() {
+  const item = upNext?.item;
+  hideUpNext();
+  if (!item) return;
+  await openFromDropbox(item);
+  if (S.picked?.dropbox?.path === item.path && video.paused) video.play().catch(() => {});   // else the viewer taps play
+}
+function setAutoNext(on) {
+  prefs.autoNext = on;
+  savePrefs();
+  $("autoNext").checked = $("upNextAuto").checked = on;
+  if (!upNext) return;
+  if (on) countDown();
+  else {
+    clearInterval(upNext.timer);
+    upNext.timer = 0;
+  }
+  drawUpNext();
+}
+$("upNextPlay").addEventListener("click", playNext);
+$("upNextStay").addEventListener("click", hideUpNext);
+$("upNextAuto").addEventListener("change", () => setAutoNext($("upNextAuto").checked));
+$("autoNext").addEventListener("change", () => setAutoNext($("autoNext").checked));
+
 // ---------------------------------------------------------------- settings
 function openSettings() {
+  $("autoNext").checked = prefs.autoNext;
   syncOffsetControls();
   syncSplitControls();
   drawSyncNote();
@@ -2277,6 +2448,7 @@ $("language").addEventListener("change", () => { S.language = $("language").valu
 function goHome() {
   if ($("settings").open) $("settings").close();
   setNotesOpen(false);
+  hideUpNext();
   if (arranging) setArranging(false);
   if (!lockLayer.hidden) setLocked(false);
   video.pause();

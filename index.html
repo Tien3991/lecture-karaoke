@@ -7,7 +7,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Karaoke">
-<meta name="app-version" content="2.8.0">
+<meta name="app-version" content="2.9.0">
 <meta name="description" content="Plays your lecture videos and audio recordings, from your device or your Dropbox, with live karaoke subtitles from their Soniox transcripts; new ones get transcribed on GitHub.">
 <title>Lecture Karaoke</title>
 <link rel="manifest" href="manifest.webmanifest">
@@ -131,6 +131,17 @@
     <ul id="noteList" class="note-list" aria-label="Notes, the newest first"></ul>
     <p id="notesHint" class="notes-hint">Swipe a note left to delete it, right to edit it. Tap its time to go there.</p>
   </section>
+  <!-- When a lecture from Dropbox ends (app.js, the next lecture): the one after it in its folder. -->
+  <section id="upNext" class="up-next" aria-label="Next lecture" hidden>
+    <p id="upNextHead" class="up-next-head"></p>
+    <p id="upNextTitle" class="up-next-title"></p>
+    <p id="upNextCount" class="up-next-count" role="status"></p>
+    <div class="up-next-buttons">
+      <button type="button" id="upNextStay">Stay here</button>
+      <button type="button" id="upNextPlay" class="primary">Play next</button>
+    </div>
+    <label class="check"><input type="checkbox" id="upNextAuto"> Play the next one by itself</label>
+  </section>
   <!-- Touch lock (app.js setLocked): covers the player so nothing takes a touch; the lock has to be slid to the right. -->
   <div id="lock" class="lock" hidden>
     <div id="unlock" class="unlock">
@@ -187,6 +198,11 @@
       <input type="range" id="hiStrength" min="20" max="90" step="5" aria-label="How much of the color the soft highlight keeps">
       <div class="range-ends" aria-hidden="true"><span>Softer</span><span>Stronger</span></div>
       <p class="small">The <b>Soft</b> button in the bar switches between the two (key H).</p>
+    </fieldset>
+    <fieldset>
+      <legend>Next lecture</legend>
+      <label class="check"><input type="checkbox" id="autoNext"> Play the next one in the folder by itself</label>
+      <p class="small">When a lecture from Dropbox ends, a card offers the next one in its folder; with this on, it starts after 5 seconds. Kept on this device.</p>
     </fieldset>
     <fieldset>
       <legend>Control bar</legend>
@@ -246,12 +262,25 @@
     <div class="speed-row">
       <select id="speedPreset" aria-label="Preset speeds"></select>
     </div>
-    <p class="small">− and + change the speed by 0.05×, from 0.2× to 4×.</p>
+    <p class="small">− and + change the speed by 0.05×, from 0.2× to 4×. <span id="speedFor"></span></p>
     <!-- The slider is gone since 2.7.0; 2.6.x and older scripts look it up at start, so it stays, hidden. -->
     <input type="range" id="speedRange" min="0" max="1000" step="1" aria-hidden="true" tabindex="-1" hidden>
     <div class="dialog-buttons">
       <button type="button" id="speedNormal">Normal</button>
       <button value="close" class="primary" autofocus>Done</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="folderDialog">
+  <form method="dialog">
+    <h2 id="folderTitle">Transcripts</h2>
+    <p id="folderSays" class="small top"></p>
+    <progress id="folderProgress" class="folder-progress" max="1" value="0"></progress>
+    <p id="folderStatus" class="small status" role="status"></p>
+    <div class="dialog-buttons">
+      <button type="button" id="folderCancel">Cancel</button>
+      <button type="button" id="folderSave" class="primary" disabled>Save ZIP</button>
     </div>
   </form>
 </dialog>

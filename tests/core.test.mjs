@@ -240,6 +240,56 @@ test("shared notes: notes added, edited and deleted on two devices; of two chang
   assert.match([...ids][0], /^[0-9a-z]+-[0-9a-z]+$/);
 });
 
+test("ZIP: what unzip reads back, deflated or stored, with UTF-8 names and none used twice", async () => {
+  const { crc32, zipFiles } = await import("../core/zip.js");
+  const zlib = await import("node:zlib");
+  const random = new Uint8Array(5000).map((_, i) => (i * 7919 + 13) % 251);
+  assert.equal(crc32(random), zlib.crc32(random));
+  /** The entries of a ZIP, read from its central directory, each checked against its local header. */
+  const unzip = (zip) => {
+    const v = new DataView(zip.buffer, zip.byteOffset, zip.byteLength), dec = new TextDecoder();
+    const end = zip.length - 22;
+    assert.equal(v.getUint32(end, true), 0x06054b50);
+    const count = v.getUint16(end + 10, true), out = [];
+    let p = v.getUint32(end + 16, true);
+    assert.equal(p + v.getUint32(end + 12, true), end, "the central directory ends where the end record starts");
+    for (let i = 0; i < count; i++) {
+      assert.equal(v.getUint32(p, true), 0x02014b50);
+      const flags = v.getUint16(p + 8, true), method = v.getUint16(p + 10, true), crc = v.getUint32(p + 16, true);
+      const size = v.getUint32(p + 20, true), n = v.getUint16(p + 28, true), at = v.getUint32(p + 42, true);
+      const name = dec.decode(zip.subarray(p + 46, p + 46 + n));
+      assert.equal(v.getUint32(at, true), 0x04034b50, "a local header where the directory says");
+      assert.equal(dec.decode(zip.subarray(at + 30, at + 30 + v.getUint16(at + 26, true))), name);
+      const body = zip.subarray(at + 30 + n, at + 30 + n + size);
+      const data = method === 8 ? new Uint8Array(zlib.inflateRawSync(body)) : body;
+      assert.equal(crc32(data), crc);
+      assert.equal(flags & 0x0800, 0x0800, "UTF-8 name");
+      out.push({ name, method, text: dec.decode(data), size: data.length });
+      p += 46 + n;
+    }
+    return out;
+  };
+  const text = "Bài 1: giới hạn của hàm số.\n".repeat(200);
+  const files = [{ name: "Bài 1.txt", data: text }, { name: "Bài 1.txt", data: "again" }, { name: "x.bin", data: random }, { name: "empty", data: "" }];
+  const zip = await zipFiles(files, new Date(2026, 9, 21, 14, 30, 10));
+  const got = unzip(zip);
+  assert.deepEqual(got.map((f) => f.name), ["Bài 1.txt", "Bài 1 (2).txt", "x.bin", "empty"]);
+  assert.equal(got[0].text, text);
+  assert.equal(got[0].method, 8, "text is deflated");
+  assert.equal(got[1].method, 0, "stored when deflating doesn't make it smaller");
+  assert.deepEqual([got[2].size, got[3].size], [5000, 0]);
+  const v = new DataView(zip.buffer);
+  assert.equal(v.getUint16(12, true), ((2026 - 1980) << 9) | (10 << 5) | 21, "the date, as DOS writes it");
+  const saved = globalThis.CompressionStream;
+  globalThis.CompressionStream = undefined;   // a browser without deflate-raw: everything stored
+  try {
+    assert.deepEqual(unzip(await zipFiles(files)).map((f) => [f.method, f.size]),
+      [[0, new TextEncoder().encode(text).length], [0, 5], [0, 5000], [0, 0]]);
+  } finally {
+    globalThis.CompressionStream = saved;
+  }
+});
+
 test("GitHub contents: text survives base64 both ways, Vietnamese and emoji included", async () => {
   const { base64FromUtf8, utf8FromBase64 } = await import("../core/github.js");
   const text = JSON.stringify({ tokens: [{ text: "Tiếng Việt đẹp — “quotes” 🎓" }], big: "x".repeat(100000) });

@@ -12,8 +12,8 @@ import path from "node:path";
 import { createServer } from "../dev/serve.mjs";
 import { BLOCK, CHUNK, ContentHasher, Dropbox, contentHash } from "../core/dropbox.js";
 import { GitHub } from "../core/github.js";
-import { changedEntry, entryStatus, folderLanguage, groupByFolder, hiddenHashes, indexEntry, keyFor, mergeLibrary, pinnedFolders,
-  playedHashes, randomPick, searchLibrary, shownFolder, withEntry, withHidden, withPinned, withPlayed } from "../core/library.js";
+import { changedEntry, entryStatus, folderLanguage, groupByFolder, hiddenHashes, indexEntry, keyFor, mergeLibrary, nextInFolder,
+  pinnedFolders, playedHashes, randomPick, searchLibrary, shownFolder, withEntry, withHidden, withPinned, withPlayed } from "../core/library.js";
 
 /** Dropbox's content hash computed with node:crypto, to check the browser code against. */
 function reference(buf) {
@@ -327,6 +327,19 @@ test("pinned folders come first; a random lecture; the files played on any devic
   const p2 = withPlayed(p1, [items[1], items[2]], "t2");
   assert.deepEqual([...playedHashes(p2)], ["h Algebra/1.mp4", "h Calculus/1.mp4"]);
   assert.equal(p2.files["h Algebra/1.mp4"].played, "t1");
+});
+
+test("the next lecture: the one after it in its folder, by name with numbers in order; none after the last", () => {
+  const file = (p) => ({ ".tag": "file", name: p.split("/").pop(), path_lower: p.toLowerCase(), path_display: p, size: 1, content_hash: p });
+  const lib = mergeLibrary(["/Robotics/2.1.1 Motion.mp4", "/Robotics/10.1 Wrenches.mp4", "/Robotics/2.1.2 Degrees.mp4",
+    "/Robotics/3.1 Space.mp4", "/Zoo/a.mp4", "/top.mp4"].map(file), []);
+  const at = (p) => lib.find((i) => i.path === p), next = (p, skip) => nextInFolder(lib, at(p), skip)?.path ?? null;
+  assert.equal(next("/Robotics/2.1.1 Motion.mp4"), "/Robotics/2.1.2 Degrees.mp4");
+  assert.equal(next("/Robotics/3.1 Space.mp4"), "/Robotics/10.1 Wrenches.mp4", "10 after 3");
+  assert.equal(next("/Robotics/10.1 Wrenches.mp4"), null, "the last of its folder");
+  assert.equal(next("/top.mp4"), null);
+  assert.equal(next("/Robotics/2.1.2 Degrees.mp4", (i) => i.name.startsWith("3.1")), "/Robotics/10.1 Wrenches.mp4", "hidden ones passed over");
+  assert.equal(nextInFolder(lib, { path: "/elsewhere.mp4", folder: "" }), null, "not in the library");
 });
 
 test("dispatch: starts transcribe.yml on main with the item; a token without Actions access is refused", async () => {
