@@ -13,14 +13,14 @@ import { GitHub } from "./core/github.js";
 import { Dropbox, LINK_MS, contentHash } from "./core/dropbox.js";
 import { extractAdts } from "./core/audio.js";
 import { HIDDEN_FILE, PINNED_FILE, PLAYED_FILE, STAGING, changedEntry, entryStatus, folderLanguage, folderOf, groupByFolder, hiddenHashes,
-  indexEntry, isoNow, keyFor, mergeLibrary, nextInFolder, pinnedFolders, playedHashes, randomPick, searchLibrary, shownFolder, withEntry,
-  withHidden, withPinned, withPlayed } from "./core/library.js";
+  indexEntry, isoNow, keyFor, mergeLibrary, nextInFolder, pinnedFolders, playedHashes, randomInFolder, randomPick, searchLibrary,
+  shownFolder, withEntry, withHidden, withPinned, withPlayed } from "./core/library.js";
 import { applyDeltas, deltaFor, sameFixes } from "./core/sync.js";
 import { applyNoteChanges, newNoteId, noteStamp, shownNotes } from "./core/notes.js";
 import * as store from "./core/store.js";
 import { zipFiles } from "./core/zip.js";
 
-const VERSION = "2.9.0";
+const VERSION = "2.10.0";
 // Proportions of the burned vertical video (identical in every pipeline calibration), in em of
 // the main subtitle text: line limit, frame width, and the height the three blocks need.
 const FIT_EM = 892.4 / 67.797, FRAME_EM = 1080 / 67.797, PANEL_EM = 14.4, CTX_SCALE = 74 / 93;
@@ -68,9 +68,8 @@ const S = {
 // ---------------------------------------------------------------- viewer preferences
 // Kept on this device for every lecture: speed (and each Dropbox folder's own, folderRates, by the
 // folder in lower case), the timing offset and whether it is on, the video/subtitle split for each
-// orientation, the highlight (its color, the soft setting and whether it is on), and whether the
-// next lecture plays by itself (autoNext). (Position, sync, language and fixes are kept per
-// transcript in IndexedDB.)
+// orientation, and the highlight (its color, the soft setting and whether it is on). (Position, sync,
+// language and fixes are kept per transcript in IndexedDB.)
 // The key carries the app prefix: all Pages projects share one origin.
 const PREFS_KEY = "lecture-karaoke.prefs";
 // Highlight presets, readable on black; yellow is the burned videos' color.
@@ -79,7 +78,7 @@ const HI_COLORS = [["Yellow", "#ffe000"], ["Orange", "#fb923c"], ["Green", "#4ad
 // The soft highlight keeps this % of the color, the rest the white of the words to come.
 const HI_SOFT_RANGE = [20, 90], HI_SOFT_DEFAULT = 40;
 const prefs = { rate: 1, folderRates: {}, offsetMs: 3000, offsetOn: false, split: { portrait: null, landscape: null }, bar: null,
-  uploadFolder: "Uploads", hi: { color: HI_COLORS[0][1], soft: false, strength: HI_SOFT_DEFAULT }, autoNext: false };
+  uploadFolder: "Uploads", hi: { color: HI_COLORS[0][1], soft: false, strength: HI_SOFT_DEFAULT } };
 try {
   const saved = JSON.parse(localStorage.getItem(PREFS_KEY) || "{}");
   Object.assign(prefs, saved, { split: { ...prefs.split, ...saved.split } });
@@ -89,7 +88,7 @@ try {
 prefs.rate = clamp(Number(prefs.rate) || 1, RATE_MIN, RATE_MAX);
 prefs.folderRates = Object.fromEntries(Object.entries(Object(prefs.folderRates))
   .filter(([, r]) => Number.isFinite(r) && r >= RATE_MIN && r <= RATE_MAX));
-prefs.autoNext = prefs.autoNext === true;
+delete prefs.autoNext;   // 2.9.0's "play the next one by itself"
 prefs.offsetMs = Number.isFinite(Number(prefs.offsetMs)) ? clamp(Number(prefs.offsetMs), -OFFSET_MAX_MS, OFFSET_MAX_MS) : 3000;
 prefs.offsetOn = prefs.offsetOn === true;
 for (const o of ["portrait", "landscape"]) if (!Number.isFinite(prefs.split[o])) prefs.split[o] = null;
@@ -313,6 +312,7 @@ function drawLibrary() {
   const withTools = !picking.on && !hiddenView;
   $("libList").replaceChildren(...groups.map((g) => {
     const d = Object.assign(document.createElement("details"), { className: "lib-folder", open: !!q || groups.length === 1 || openFolders.has(g.folder) });
+    d.dataset.folder = g.folder;
     d.addEventListener("toggle", () => { if (!$("libSearch").value.trim()) (d.open ? openFolders.add(g.folder) : openFolders.delete(g.folder)); });
     const summary = document.createElement("summary"), name = folderTitle(g.folder);
     summary.append(name, Object.assign(document.createElement("span"), { className: "lib-count", textContent: ` ${g.items.length}` }));
@@ -2350,69 +2350,87 @@ function syncNotes() {
   return notesSyncing;
 }
 
-// ---------------------------------------------------------------- the next lecture
-// When a lecture from the Dropbox library ends, a card offers the next one in its folder (the
-// library's order; hidden files are passed over). With "Play the next one by itself" (kept on this
-// device, also in Settings) it starts after AUTO_NEXT_S seconds unless Stay here is tapped.
+// ---------------------------------------------------------------- when a lecture ends
+// When a lecture from the Dropbox library ends, a card offers: back to the folder list, the next
+// lecture in its folder (library order; hidden files are passed over), a random one from the folder,
+// and those two for the rest of the session. With "Keep playing …" each lecture that ends is followed
+// by the next (or a random) one after AUTO_NEXT_S seconds, which Stop (or any other choice) cancels,
+// until the viewer goes back to the folder list or closes the app. Random lectures are transcribed
+// ones when there are any, and none comes twice until all of the folder's have played.
 const AUTO_NEXT_S = 5;
-let upNext = null;   // {item, left, timer}
+const session = { mode: null, played: new Set() };   // mode: "next" | "random" | null; played: paths, for random
+let ending = null;   // the card: {now, next, random, left, timer}
+const lectureTitle = (it) => it.name.replace(/\.[^.]+$/, "");
 video.addEventListener("ended", () => {
   const d = S.picked?.dropbox, fp = S.picked?.fingerprint;
   const now = library.items.find((i) => (d?.path ? i.path === d.path : fp && i.entry?.fingerprint === fp));
-  const next = now && nextInFolder(library.items, now, (i) => library.hidden.has(i.hash));
-  if (next) showUpNext(next);
+  if (now) showEnding(now);
 });
 video.addEventListener("play", () => hideUpNext());
-function showUpNext(item) {
+function showEnding(now) {
   hideUpNext();
-  upNext = { item, left: AUTO_NEXT_S, timer: 0 };
-  $("upNextHead").textContent = `Next in “${folderTitle(item.folder)}”`;
-  $("upNextTitle").textContent = item.name.replace(/\.[^.]+$/, "");
-  $("upNextAuto").checked = prefs.autoNext;
+  session.played.add(now.path);
+  const skip = (i) => library.hidden.has(i.hash);
+  const next = nextInFolder(library.items, now, skip);
+  let random = randomInFolder(library.items, now, session.played, skip);
+  if (random && session.played.has(random.path)) {   // all of the folder's have played: a new round
+    session.played = new Set([now.path]);
+    random = randomInFolder(library.items, now, session.played, skip);
+  }
+  if ((session.mode === "next" && !next) || (session.mode === "random" && !random)) session.mode = null;   // nothing to go on with
+  ending = { now, next, random, left: AUTO_NEXT_S, timer: 0 };
+  $("upNextHead").textContent = `The lecture has ended · “${folderTitle(now.folder)}”`;
+  $("upNextTitle").textContent = next ? `Next in this folder: ${lectureTitle(next)}` : "That was the last lecture in this folder.";
+  $("upNextPlay").disabled = $("endKeepNext").disabled = !next;
+  $("endRandom").disabled = $("endKeepRandom").disabled = !random;
   $("upNext").hidden = false;
-  if (prefs.autoNext) countDown();
-  drawUpNext();
+  if (session.mode) ending.timer = setInterval(() => (--ending.left > 0 ? drawEnding() : playLecture(session.mode)), 1000);
+  drawEnding();
 }
-function countDown() {
-  clearInterval(upNext.timer);
-  upNext.left = AUTO_NEXT_S;
-  upNext.timer = setInterval(() => (--upNext.left > 0 ? drawUpNext() : playNext()), 1000);
-}
-function drawUpNext() {
-  $("upNextCount").textContent = upNext?.timer ? `Playing in ${upNext.left} s…` : "";
+function drawEnding() {
+  $("endKeepNext").setAttribute("aria-pressed", String(session.mode === "next"));
+  $("endKeepRandom").setAttribute("aria-pressed", String(session.mode === "random"));
+  $("endCountLine").hidden = !ending?.timer;
+  if (ending?.timer) {
+    const it = session.mode === "next" ? ending.next : ending.random;
+    $("upNextCount").textContent = `${session.mode === "next" ? "Next" : "A random one"}: “${lectureTitle(it)}” in ${ending.left} s.`;
+  }
 }
 function hideUpNext() {
-  if (upNext) clearInterval(upNext.timer);
-  upNext = null;
+  if (ending) clearInterval(ending.timer);
+  ending = null;
   $("upNext").hidden = true;
 }
-async function playNext() {
-  const item = upNext?.item;
-  hideUpNext();
+/** Plays the card's next ("next") or random lecture; keep: go on like that for the rest of the session. */
+async function playLecture(which, keep = true) {
+  const item = which === "next" ? ending?.next : ending?.random;
   if (!item) return;
+  session.mode = keep ? which : null;
+  hideUpNext();
   await openFromDropbox(item);
   if (S.picked?.dropbox?.path === item.path && video.paused) video.play().catch(() => {});   // else the viewer taps play
 }
-function setAutoNext(on) {
-  prefs.autoNext = on;
-  savePrefs();
-  $("autoNext").checked = $("upNextAuto").checked = on;
-  if (!upNext) return;
-  if (on) countDown();
-  else {
-    clearInterval(upNext.timer);
-    upNext.timer = 0;
-  }
-  drawUpNext();
+/** The start screen, with this folder open and in view in the library. */
+async function backToFolder(folder) {
+  openFolders.add(folder);
+  goHome();
+  await loadLibrary();
+  [...document.querySelectorAll(".lib-folder")].find((d) => d.dataset.folder === folder)?.scrollIntoView({ block: "start" });
 }
-$("upNextPlay").addEventListener("click", playNext);
-$("upNextStay").addEventListener("click", hideUpNext);
-$("upNextAuto").addEventListener("change", () => setAutoNext($("upNextAuto").checked));
-$("autoNext").addEventListener("change", () => setAutoNext($("autoNext").checked));
+$("endBack").addEventListener("click", () => ending && backToFolder(ending.now.folder));
+$("upNextPlay").addEventListener("click", () => playLecture("next", false));
+$("endKeepNext").addEventListener("click", () => playLecture("next"));
+$("endRandom").addEventListener("click", () => playLecture("random", false));
+$("endKeepRandom").addEventListener("click", () => playLecture("random"));
+$("upNextStay").addEventListener("click", () => {   // Stop: no more by itself; the card stays
+  session.mode = null;
+  clearInterval(ending?.timer);
+  if (ending) ending.timer = 0;
+  drawEnding();
+});
 
 // ---------------------------------------------------------------- settings
 function openSettings() {
-  $("autoNext").checked = prefs.autoNext;
   syncOffsetControls();
   syncSplitControls();
   drawSyncNote();
@@ -2449,6 +2467,7 @@ function goHome() {
   if ($("settings").open) $("settings").close();
   setNotesOpen(false);
   hideUpNext();
+  Object.assign(session, { mode: null, played: new Set() });   // "keep playing" lasts until the folder list
   if (arranging) setArranging(false);
   if (!lockLayer.hidden) setLocked(false);
   video.pause();

@@ -7,7 +7,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Karaoke">
-<meta name="app-version" content="2.9.0">
+<meta name="app-version" content="2.10.0">
 <meta name="description" content="Plays your lecture videos and audio recordings, from your device or your Dropbox, with live karaoke subtitles from their Soniox transcripts; new ones get transcribed on GitHub.">
 <title>Lecture Karaoke</title>
 <link rel="manifest" href="manifest.webmanifest">
@@ -131,17 +131,25 @@
     <ul id="noteList" class="note-list" aria-label="Notes, the newest first"></ul>
     <p id="notesHint" class="notes-hint">Swipe a note left to delete it, right to edit it. Tap its time to go there.</p>
   </section>
-  <!-- When a lecture from Dropbox ends (app.js, the next lecture): the one after it in its folder. -->
-  <section id="upNext" class="up-next" aria-label="Next lecture" hidden>
-    <p id="upNextHead" class="up-next-head"></p>
-    <p id="upNextTitle" class="up-next-title"></p>
-    <p id="upNextCount" class="up-next-count" role="status"></p>
-    <div class="up-next-buttons">
-      <button type="button" id="upNextStay">Stay here</button>
-      <button type="button" id="upNextPlay" class="primary">Play next</button>
-    </div>
-    <label class="check"><input type="checkbox" id="upNextAuto"> Play the next one by itself</label>
-  </section>
+  <!-- When a lecture from Dropbox ends (app.js, when a lecture ends): what to play then. Over the video
+       and subtitles, down to the bar. -->
+  <div id="upNext" class="up-next-layer" hidden>
+    <section class="up-next" aria-label="The lecture has ended">
+      <p id="upNextHead" class="up-next-head"></p>
+      <p id="upNextTitle" class="up-next-title"></p>
+      <div class="up-next-choices">
+        <button type="button" id="endBack">Back to the folder list</button>
+        <button type="button" id="upNextPlay" class="primary">Next video</button>
+        <button type="button" id="endKeepNext" aria-pressed="false">Keep playing the next videos</button>
+        <button type="button" id="endRandom">A random video in this folder</button>
+        <button type="button" id="endKeepRandom" aria-pressed="false">Keep playing random videos in this folder</button>
+      </div>
+      <p id="endCountLine" class="up-next-count" hidden><span id="upNextCount" role="status"></span>
+        <button type="button" id="upNextStay" class="linkish">Stop</button></p>
+      <p class="small">“Keep playing” goes on until you go back to the folder list or close the app.</p>
+      <input type="checkbox" id="upNextAuto" hidden>   <!-- 2.9.0 scripts look it up at start -->
+    </section>
+  </div>
   <!-- Touch lock (app.js setLocked): covers the player so nothing takes a touch; the lock has to be slid to the right. -->
   <div id="lock" class="lock" hidden>
     <div id="unlock" class="unlock">
@@ -199,11 +207,7 @@
       <div class="range-ends" aria-hidden="true"><span>Softer</span><span>Stronger</span></div>
       <p class="small">The <b>Soft</b> button in the bar switches between the two (key H).</p>
     </fieldset>
-    <fieldset>
-      <legend>Next lecture</legend>
-      <label class="check"><input type="checkbox" id="autoNext"> Play the next one in the folder by itself</label>
-      <p class="small">When a lecture from Dropbox ends, a card offers the next one in its folder; with this on, it starts after 5 seconds. Kept on this device.</p>
-    </fieldset>
+    <input type="checkbox" id="autoNext" hidden>   <!-- 2.9.0's "Next lecture" setting; its scripts look it up at start -->
     <fieldset>
       <legend>Control bar</legend>
       <button type="button" id="arrangeBtn">Arrange the buttons</button>

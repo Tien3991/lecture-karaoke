@@ -54,11 +54,18 @@ fixes; speed, offset, layout and highlight are remembered on the device for ever
 speed is kept per Dropbox folder: a lecture opens at the speed last chosen for its folder (a folder
 without one, or a file not in Dropbox, at the speed chosen last anywhere).
 
-**Next lecture.** When a lecture from Dropbox ends, a card offers the next one in its folder (in the
-library's order; hidden files are passed over): **Play next** opens and plays it, *Stay here*
-closes the card. Tick *Play the next one by itself* (on the card, or ⋯ Settings → *Next lecture*;
-kept on the device) and it starts after 5 seconds unless you tap *Stay here*. After a folder's last
-lecture there is no card.
+**When a lecture ends.** When a lecture from Dropbox ends, a card offers five choices:
+- *Back to the folder list*: the start screen, with the lecture's folder open;
+- **Next video**: the next lecture in its folder (in the library's order; hidden files are passed over);
+- *Keep playing the next videos*: the next one now, and after each lecture that ends, the one after
+  it, 5 seconds later;
+- *A random video in this folder*: a transcribed one when the folder has any;
+- *Keep playing random videos in this folder*: a random one now and after each lecture that ends,
+  none twice until all of the folder's have played.
+
+"Keep playing" lasts until you go back to the folder list or close the app; *Stop*, beside the
+countdown, ends it sooner. After a folder's last lecture the two next choices are greyed out.
+Playing the lecture again closes the card.
 
 **Notes.** The notes button (or `N`) opens a layer over the video and subtitles, which show through
 it; the bar still works. Type a note in the box and press Enter (Shift+Enter starts a new line): it

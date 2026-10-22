@@ -86,6 +86,16 @@ export function nextInFolder(items, current, skip = () => false) {
   return null;
 }
 
+/** A random lecture from now's folder other than now, passing over those skip() says to: one with a
+ *  transcript when there are any, and among those one not in `played` (paths) while there are any;
+ *  null when the folder has no other. */
+export function randomInFolder(items, now, played = new Set(), skip = () => false, random = Math.random) {
+  const others = items.filter((i) => i.folder === now.folder && i.path !== now.path && !skip(i));
+  const ready = others.filter((i) => i.status === "ready"), pool = ready.length ? ready : others;
+  const fresh = pool.filter((i) => !played.has(i.path));
+  return randomPick(fresh.length ? fresh : pool, random);
+}
+
 /** A random item to play: a transcribed one when the folder has any. */
 export function randomPick(items, random = Math.random) {
   const ready = items.filter((i) => i.status === "ready"), from = ready.length ? ready : items;

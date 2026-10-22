@@ -13,7 +13,8 @@ import { createServer } from "../dev/serve.mjs";
 import { BLOCK, CHUNK, ContentHasher, Dropbox, contentHash } from "../core/dropbox.js";
 import { GitHub } from "../core/github.js";
 import { changedEntry, entryStatus, folderLanguage, groupByFolder, hiddenHashes, indexEntry, keyFor, mergeLibrary, nextInFolder,
-  pinnedFolders, playedHashes, randomPick, searchLibrary, shownFolder, withEntry, withHidden, withPinned, withPlayed } from "../core/library.js";
+  pinnedFolders, playedHashes, randomInFolder, randomPick, searchLibrary, shownFolder, withEntry, withHidden, withPinned,
+  withPlayed } from "../core/library.js";
 
 /** Dropbox's content hash computed with node:crypto, to check the browser code against. */
 function reference(buf) {
@@ -340,6 +341,20 @@ test("the next lecture: the one after it in its folder, by name with numbers in 
   assert.equal(next("/top.mp4"), null);
   assert.equal(next("/Robotics/2.1.2 Degrees.mp4", (i) => i.name.startsWith("3.1")), "/Robotics/10.1 Wrenches.mp4", "hidden ones passed over");
   assert.equal(nextInFolder(lib, { path: "/elsewhere.mp4", folder: "" }), null, "not in the library");
+});
+
+test("a random lecture from the folder: never the one that ended, transcribed first, none twice while others are left", () => {
+  const item = (name, status = "ready", folder = "C") => ({ name, path: `/${folder}/${name}`, folder, status, hash: name });
+  const lib = [item("a"), item("b"), item("c"), item("d", "pending"), item("x", "ready", "Other")];
+  const pick = (now, played, r = 0, skip) => randomInFolder(lib, lib.find((i) => i.name === now), new Set(played), skip, () => r)?.name ?? null;
+  assert.equal(pick("a", []), "b", "not itself, nor another folder's");
+  assert.equal(pick("a", [], 0.99), "c", "transcribed ones first (not d)");
+  assert.equal(pick("a", ["/C/b"]), "c", "not played this session");
+  assert.equal(pick("a", ["/C/b", "/C/c"]), "b", "all played: any again");
+  assert.equal(pick("b", [], 0, (i) => i.name === "a"), "c", "hidden ones passed over");
+  assert.equal(pick("x", []), null, "the folder has no other");
+  assert.equal(randomInFolder([item("d", "pending"), item("e", null)], item("d", "pending"), new Set(), undefined, () => 0).name, "e",
+    "any, when none has a transcript");
 });
 
 test("dispatch: starts transcribe.yml on main with the item; a token without Actions access is refused", async () => {
