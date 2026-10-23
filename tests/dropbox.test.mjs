@@ -12,9 +12,10 @@ import path from "node:path";
 import { createServer } from "../dev/serve.mjs";
 import { BLOCK, CHUNK, ContentHasher, Dropbox, contentHash } from "../core/dropbox.js";
 import { GitHub } from "../core/github.js";
-import { changedEntry, entryStatus, folderLanguage, groupByFolder, hiddenHashes, indexEntry, keyFor, mergeLibrary, nextInFolder,
-  pinnedFolders, playedHashes, randomInFolder, randomPick, searchLibrary, shownFolder, withEntry, withHidden, withPinned,
-  withPlayed } from "../core/library.js";
+import { allTags, changedEntry, cleanTags, entryStatus, folderLanguage, folderTags, groupByFolder, hiddenHashes, indexEntry, keyFor,
+  mergeLibrary, nextInFolder, pinnedFolders, playedHashes, randomPick, searchLibrary, shownFolder, unimportantHashes, withEntry,
+  withHidden, withPinned, withPlayed, withTags, withUnimportant } from "../core/library.js";
+import { END_MODES, neighbor, nextEndMode, randomOther, spentEndMode, tagList } from "../core/playlist.js";
 
 /** Dropbox's content hash computed with node:crypto, to check the browser code against. */
 function reference(buf) {
@@ -343,18 +344,67 @@ test("the next lecture: the one after it in its folder, by name with numbers in 
   assert.equal(nextInFolder(lib, { path: "/elsewhere.mp4", folder: "" }), null, "not in the library");
 });
 
-test("a random lecture from the folder: never the one that ended, transcribed first, none twice while others are left", () => {
-  const item = (name, status = "ready", folder = "C") => ({ name, path: `/${folder}/${name}`, folder, status, hash: name });
-  const lib = [item("a"), item("b"), item("c"), item("d", "pending"), item("x", "ready", "Other")];
-  const pick = (now, played, r = 0, skip) => randomInFolder(lib, lib.find((i) => i.name === now), new Set(played), skip, () => r)?.name ?? null;
-  assert.equal(pick("a", []), "b", "not itself, nor another folder's");
+test("a random lecture from a list: never the one that ended, transcribed first, none twice while others are left", () => {
+  const item = (name, status = "ready") => ({ name, path: `/C/${name}`, folder: "C", status, hash: name });
+  const list = [item("a"), item("b"), item("c"), item("d", "pending")];
+  const pick = (now, played, r = 0) => randomOther(list, list.find((i) => i.name === now), new Set(played), () => r)?.name ?? null;
+  assert.equal(pick("a", []), "b", "not itself");
   assert.equal(pick("a", [], 0.99), "c", "transcribed ones first (not d)");
-  assert.equal(pick("a", ["/C/b"]), "c", "not played this session");
+  assert.equal(pick("a", ["/C/b"]), "c", "not played yet");
   assert.equal(pick("a", ["/C/b", "/C/c"]), "b", "all played: any again");
-  assert.equal(pick("b", [], 0, (i) => i.name === "a"), "c", "hidden ones passed over");
-  assert.equal(pick("x", []), null, "the folder has no other");
-  assert.equal(randomInFolder([item("d", "pending"), item("e", null)], item("d", "pending"), new Set(), undefined, () => 0).name, "e",
+  assert.equal(pick(null, [], 0.5), "b", "the first of a list: any of them");
+  assert.equal(randomOther([list[0]], list[0]), null, "no other");
+  assert.equal(randomOther([item("d", "pending"), item("e", null)], item("d", "pending"), new Set(), () => 0).name, "e",
     "any, when none has a transcript");
+});
+
+test("the end mode button: stay, the next once, the next every time, a random one once, every time, and round again", () => {
+  assert.deepEqual(END_MODES.map(nextEndMode), ["next1", "next", "shuffle1", "shuffle", "stay"]);
+  assert.equal(nextEndMode("anything else"), "stay");
+  assert.deepEqual(END_MODES.map(spentEndMode), ["stay", "stay", "next", "stay", "shuffle"], "the once-only ones are spent");
+  const list = ["a", "b", "c"].map((name) => ({ name, path: `/F/${name}` }));
+  assert.equal(neighbor(list, list[1], 1), list[2]);
+  assert.equal(neighbor(list, list[1], -1), list[0]);
+  assert.equal(neighbor(list, list[2], 1), null, "after the last");
+  assert.equal(neighbor(list, list[0], -1), null, "before the first");
+  assert.equal(neighbor(list, { path: "/elsewhere" }, 1), null, "not in the list");
+});
+
+test("not important: unimportant.json knows files by content hash, like hidden.json", () => {
+  const a = { name: "a.mp4", path: "/C/a.mp4", hash: "ha" }, b = { name: "b.mp4", path: "/C/b.mp4", hash: "hb" };
+  const one = withUnimportant(null, [a], true, "t1");
+  assert.deepEqual(one, { version: 1, files: { ha: { name: "a.mp4", path: "/C/a.mp4", marked: "t1" } } });
+  assert.equal(withUnimportant(one, [a], true, "t2"), undefined, "already marked");
+  assert.deepEqual([...unimportantHashes(withUnimportant(one, [b], true, "t2"))], ["ha", "hb"]);
+  assert.deepEqual(withUnimportant(one, [a], false), { version: 1, files: {} }, "important again");
+  assert.equal(withUnimportant(one, [b], false), undefined, "it wasn't marked");
+});
+
+test("tags: tidied, kept per folder in any case, listed once each; lists by tag in the library's order", () => {
+  assert.deepEqual(cleanTags(["  Exam  prep ", "exam PREP", "", null, "Math", "x".repeat(50)]), ["Exam prep", "Math", "x".repeat(40)]);
+  const one = withTags(null, "Robotics", ["Exam", "math"], "t1");
+  assert.deepEqual(one, { version: 1, folders: { robotics: { folder: "Robotics", tags: ["Exam", "math"], updated: "t1" } } });
+  assert.equal(withTags(one, "ROBOTICS", [" Exam", "math "], "t2"), undefined, "the same tags");
+  const two = withTags(one, "Calculus", ["Math"], "t2");
+  assert.deepEqual([...folderTags(two)], [["robotics", ["Exam", "math"]], ["calculus", ["Math"]]]);
+  assert.deepEqual(allTags(folderTags(two)), ["Exam", "math"], "each tag once, in its first spelling");
+  assert.deepEqual(withTags(two, "robotics", [], "t3").folders, { calculus: two.folders.calculus }, "no tags: no entry");
+  assert.equal(withTags({ version: 1, folders: {}, note: "kept" }, "A", ["x"]).note, "kept");
+
+  const item = (folder, name, status = "ready") => ({ folder, name, path: `/${folder}/${name}`, hash: `h ${folder}/${name}`, status });
+  const items = [item("Algebra", "1.mp4"), item("Calculus", "1.mp4"), item("Calculus", "2.mp4"), item("Robotics", "1.1.mp4"),
+    item("Robotics", "2.1.mp4"), item("Zoology", "1.mp4")];
+  const tags = folderTags(withTags(two, "Zoology", ["exam"]));
+  const names = (list) => list.map((i) => `${i.folder}/${i.name}`);
+  assert.deepEqual(names(tagList(items, tags, new Set(["math"]))), ["Calculus/1.mp4", "Calculus/2.mp4", "Robotics/1.1.mp4", "Robotics/2.1.mp4"]);
+  assert.deepEqual(names(tagList(items, tags, new Set(["exam"]), { pinned: new Set(["zoology"]) })),
+    ["Zoology/1.mp4", "Robotics/1.1.mp4", "Robotics/2.1.mp4"], "pinned folders first, as in the library");
+  const played = new Set(["h Robotics/1.1.mp4"]), isNew = (i) => !played.has(i.hash);
+  assert.deepEqual(names(tagList(items, tags, new Set(["exam"]), { status: "new", isNew })), ["Robotics/2.1.mp4", "Zoology/1.mp4"]);
+  assert.deepEqual(names(tagList(items, tags, new Set(["exam"]), { status: "played", isNew })), ["Robotics/1.1.mp4"]);
+  assert.deepEqual(names(tagList(items, tags, new Set(["math"]), { leave: (i) => i.name === "2.mp4" })),
+    ["Calculus/1.mp4", "Robotics/1.1.mp4", "Robotics/2.1.mp4"], "not important ones left out");
+  assert.deepEqual(tagList(items, tags, new Set()), [], "no tag chosen");
 });
 
 test("dispatch: starts transcribe.yml on main with the item; a token without Actions access is refused", async () => {

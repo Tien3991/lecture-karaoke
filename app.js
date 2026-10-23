@@ -12,15 +12,17 @@ import { applyFixes, exportTranscript, transcriptText } from "./core/corrections
 import { GitHub } from "./core/github.js";
 import { Dropbox, LINK_MS, contentHash } from "./core/dropbox.js";
 import { extractAdts } from "./core/audio.js";
-import { HIDDEN_FILE, PINNED_FILE, PLAYED_FILE, STAGING, changedEntry, entryStatus, folderLanguage, folderOf, groupByFolder, hiddenHashes,
-  indexEntry, isoNow, keyFor, mergeLibrary, nextInFolder, pinnedFolders, playedHashes, randomInFolder, randomPick, searchLibrary,
-  shownFolder, withEntry, withHidden, withPinned, withPlayed } from "./core/library.js";
+import { HIDDEN_FILE, PINNED_FILE, PLAYED_FILE, STAGING, TAGS_FILE, UNIMPORTANT_FILE, allTags, changedEntry, cleanTags, entryStatus,
+  folderLanguage, folderOf, folderTags, groupByFolder, hiddenHashes, indexEntry, isoNow, keyFor, mergeLibrary, pinnedFolders, playedHashes,
+  randomPick, searchLibrary, shownFolder, unimportantHashes, withEntry, withHidden, withPinned, withPlayed, withTags,
+  withUnimportant } from "./core/library.js";
+import { END_MODES, neighbor, nextEndMode, randomOther, spentEndMode, tagList } from "./core/playlist.js";
 import { applyDeltas, deltaFor, sameFixes } from "./core/sync.js";
 import { applyNoteChanges, newNoteId, noteStamp, shownNotes } from "./core/notes.js";
 import * as store from "./core/store.js";
 import { zipFiles } from "./core/zip.js";
 
-const VERSION = "2.10.0";
+const VERSION = "2.11.0";
 // Proportions of the burned vertical video (identical in every pipeline calibration), in em of
 // the main subtitle text: line limit, frame width, and the height the three blocks need.
 const FIT_EM = 892.4 / 67.797, FRAME_EM = 1080 / 67.797, PANEL_EM = 14.4, CTX_SCALE = 74 / 93;
@@ -61,15 +63,17 @@ const S = {
   videoFile: null, jsonFile: null, picked: null, wanted: null, videoUrl: null, videoName: "", transcript: null,
   id: null, rec: {}, repoKey: null, baseWords: [], words: [], pieces: [], events: [], durationMs: 0, audioOffsetMs: 0,
   leadMs: 0, syncMs: 0, language: "en", editing: false, shown: -2, spoken: -1, lastSecond: -1,
-  playing: false,    // the viewer's play/pause, kept while a Dropbox link is renewed (swapping)
-  swapping: false,
+  playing: false,    // the viewer's play/pause, kept while a Dropbox link is renewed (swapping) and while
+                     // iPhone pauses the video for the background (the sound goes on: playHidden)
+  swapping: false, handing: false, startAt: 0,
 };
 
 // ---------------------------------------------------------------- viewer preferences
 // Kept on this device for every lecture: speed (and each Dropbox folder's own, folderRates, by the
 // folder in lower case), the timing offset and whether it is on, the video/subtitle split for each
-// orientation, and the highlight (its color, the soft setting and whether it is on). (Position, sync,
-// language and fixes are kept per transcript in IndexedDB.)
+// orientation, the highlight (its color, the soft setting and whether it is on), what happens when a
+// lecture ends (endMode), the last Play by tag choice (tagPick) and sleep timer (sleepMin). (Position,
+// sync, language and fixes are kept per transcript in IndexedDB.)
 // The key carries the app prefix: all Pages projects share one origin.
 const PREFS_KEY = "lecture-karaoke.prefs";
 // Highlight presets, readable on black; yellow is the burned videos' color.
@@ -78,7 +82,7 @@ const HI_COLORS = [["Yellow", "#ffe000"], ["Orange", "#fb923c"], ["Green", "#4ad
 // The soft highlight keeps this % of the color, the rest the white of the words to come.
 const HI_SOFT_RANGE = [20, 90], HI_SOFT_DEFAULT = 40;
 const prefs = { rate: 1, folderRates: {}, offsetMs: 3000, offsetOn: false, split: { portrait: null, landscape: null }, bar: null,
-  uploadFolder: "Uploads", hi: { color: HI_COLORS[0][1], soft: false, strength: HI_SOFT_DEFAULT } };
+  uploadFolder: "Uploads", hi: { color: HI_COLORS[0][1], soft: false, strength: HI_SOFT_DEFAULT }, endMode: "stay" };
 try {
   const saved = JSON.parse(localStorage.getItem(PREFS_KEY) || "{}");
   Object.assign(prefs, saved, { split: { ...prefs.split, ...saved.split } });
@@ -89,6 +93,7 @@ prefs.rate = clamp(Number(prefs.rate) || 1, RATE_MIN, RATE_MAX);
 prefs.folderRates = Object.fromEntries(Object.entries(Object(prefs.folderRates))
   .filter(([, r]) => Number.isFinite(r) && r >= RATE_MIN && r <= RATE_MAX));
 delete prefs.autoNext;   // 2.9.0's "play the next one by itself"
+if (!END_MODES.includes(prefs.endMode)) prefs.endMode = "stay";
 prefs.offsetMs = Number.isFinite(Number(prefs.offsetMs)) ? clamp(Number(prefs.offsetMs), -OFFSET_MAX_MS, OFFSET_MAX_MS) : 3000;
 prefs.offsetOn = prefs.offsetOn === true;
 for (const o of ["portrait", "landscape"]) if (!Number.isFinite(prefs.split[o])) prefs.split[o] = null;
@@ -216,12 +221,15 @@ async function dropboxFiles() {
 // in select mode a tap chooses it, to hide the chosen files from the list or delete them from
 // Dropbox. Hidden files (hidden.json in the repository, by content hash) have their own view.
 // Files never played on any device are marked New (played.json), and pinned folders (pinned.json)
-// come first; each folder has a button that plays a random lecture from it.
+// come first; each folder has a button that plays a random lecture from it. Folders can have tags
+// (tags.json) and lectures can be marked not important (unimportant.json): Play by tag lists the
+// lectures of the folders with the tags chosen, leaving out the ones not important.
 
-/** A set kept in a repository file that every device shares (hidden.json, played.json, pinned.json):
- *  read with each listing, changed here at once and then on GitHub. at: when the last change reached
- *  GitHub (Infinity while any is on its way, counted in writing); a listing begun before that keeps
- *  the set as it is here. known: read from GitHub at least once. */
+/** A set kept in a repository file that every device shares (hidden.json, played.json, pinned.json,
+ *  unimportant.json; tags.json gives a Map of each folder's tags): read with each listing, changed
+ *  here at once and then on GitHub. at: when the last change reached GitHub (Infinity while any is
+ *  on its way, counted in writing); a listing begun before that keeps the set as it is here. known:
+ *  read from GitHub at least once. */
 class SharedSet {
   constructor(file, keysOf) { Object.assign(this, { file, keysOf, set: new Set(), at: 0, writing: 0, known: false }); }
   has(key) { return this.set.has(key); }
@@ -242,16 +250,21 @@ class SharedSet {
   }
   /** Adds keys to the set here (add false: removes them) before it returns, then changes the file on
    *  GitHub with change(its data). When that fails, the set goes back and the error is thrown. */
-  async write(keys, add, change, message) {
+  write(keys, add, change, message) {
     const mark = (on) => { for (const k of keys) (on ? this.set.add(k) : this.set.delete(k)); };
-    mark(add);
+    return this.send(() => mark(add), () => mark(!add), change, message);
+  }
+  /** Makes a change here (local()) before it returns, then on GitHub with change(the file's data);
+   *  when that fails, undo() takes it back here and the error is thrown. */
+  async send(local, undo, change, message) {
+    local();
     this.writing++;
     this.at = Infinity;
     try {
       const data = await gh.update(this.file, change, message);
       if (this.writing === 1) Object.assign(this, { set: this.keysOf(data), known: true });   // as GitHub has it, other devices' changes too
     } catch (err) {
-      mark(!add);
+      undo();
       throw err;
     } finally {
       if (--this.writing === 0) this.at = Date.now();
@@ -260,7 +273,9 @@ class SharedSet {
 }
 const library = { items: [], loading: null, opening: false, note: "", watchUntil: 0, view: "all",
   hidden: new SharedSet(HIDDEN_FILE, hiddenHashes), played: new SharedSet(PLAYED_FILE, playedHashes),
-  pinned: new SharedSet(PINNED_FILE, pinnedFolders) };
+  pinned: new SharedSet(PINNED_FILE, pinnedFolders), unimportant: new SharedSet(UNIMPORTANT_FILE, unimportantHashes),
+  tags: new SharedSet(TAGS_FILE, folderTags) };
+library.tags.set = new Map();
 const picking = { on: false, paths: new Set(), busy: "" };   // select mode: the chosen files' paths; busy: progress
 const openFolders = new Set();
 const BADGES = { ready: ["Ready", "ok"], pending: ["Transcribing", "busy"], failed: ["Failed", "bad"], null: ["Not transcribed", "none"] };
@@ -271,7 +286,7 @@ function loadLibrary() {
   if (!library.loading) {
     library.loading = (async () => {
       try {
-        const started = Date.now(), shared = [library.hidden, library.played, library.pinned];
+        const started = Date.now(), shared = [library.hidden, library.played, library.pinned, library.unimportant, library.tags];
         const [{ files, offline }, index, ...got] = await Promise.all([dropboxFiles(), repoIndex(), ...shared.map((s) => s.fetch())]);
         library.items = mergeLibrary(files, index.videos || []);
         shared.forEach((s, i) => s.take(got[i], started));
@@ -314,18 +329,21 @@ function drawLibrary() {
     const d = Object.assign(document.createElement("details"), { className: "lib-folder", open: !!q || groups.length === 1 || openFolders.has(g.folder) });
     d.dataset.folder = g.folder;
     d.addEventListener("toggle", () => { if (!$("libSearch").value.trim()) (d.open ? openFolders.add(g.folder) : openFolders.delete(g.folder)); });
-    const summary = document.createElement("summary"), name = folderTitle(g.folder);
+    const summary = document.createElement("summary"), name = folderTitle(g.folder), tags = library.tags.set.get(g.folder.toLowerCase()) || [];
     summary.append(name, Object.assign(document.createElement("span"), { className: "lib-count", textContent: ` ${g.items.length}` }));
+    if (tags.length) summary.append(el("span", { className: "lib-tags" }, ...tags.map((t) => el("span", { className: "tag", textContent: t }))));
     const ul = Object.assign(document.createElement("ul"), { className: "lib-items" });
     ul.append(...g.items.map((it) => {
       const [label, cls] = BADGES[it.status], b = Object.assign(document.createElement("button"), { type: "button", className: "lib-item" });
       const meta = [it.audio ? "Audio" : "", it.entry?.duration_ms ? clock(it.entry.duration_ms / 1000) : "", mb(it.size),
         it.status === "failed" ? it.entry.error : ""];
-      const metaLine = Object.assign(document.createElement("span"), { className: "lib-meta" });
+      const metaLine = Object.assign(document.createElement("span"), { className: "lib-meta" }), minor = library.unimportant.has(it.hash);
       if (isNew(it)) metaLine.append(Object.assign(document.createElement("span"), { className: "lib-new", textContent: "New" }), " · ");
+      if (minor) metaLine.append("Not important · ");
       metaLine.append(meta.filter(Boolean).join(" · "));
       b.append(Object.assign(document.createElement("span"), { className: "lib-title", textContent: it.name.replace(/\.[^.]+$/, "") }),
         Object.assign(document.createElement("span"), { className: `badge ${cls}`, textContent: label }), metaLine);
+      b.classList.toggle("minor", minor);
       if (picking.on) {
         b.classList.add("picking");
         b.setAttribute("aria-pressed", String(picking.paths.has(it.path)));
@@ -334,9 +352,16 @@ function drawLibrary() {
       b.addEventListener("click", () => (picking.on ? pick(it, b) : openFromDropbox(it)));
       const li = document.createElement("li");
       li.append(b);
+      if (withTools) li.append(importanceButton(it, !minor));
       return li;
     }));
-    d.append(summary, ul);
+    d.append(summary);
+    if (withTools) {   // the folder's tags, when it is open
+      const edit = el("button", { type: "button", className: "linkish", textContent: tags.length ? "Edit tags" : "Add tags" });
+      edit.addEventListener("click", () => editTags(g.folder, name));
+      d.append(el("p", { className: "lib-tag-line" }, edit));
+    }
+    d.append(ul);
     if (!withTools) return d;
     // Beside the folder's name, not in it (a button inside <summary> would open and close the folder):
     // a random lecture from the folder, its transcripts in one ZIP, and the pin.
@@ -364,6 +389,153 @@ $("libSearch").addEventListener("input", drawLibrary);
 const SHUFFLE_SVG = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7h3.2c2 0 3.1 1 4.1 2.6l2.6 4.8c1 1.6 2.1 2.6 4.1 2.6H20M3 17h3.2c1.3 0 2.2-.4 3-1.2M14.2 8.2c.8-.8 1.7-1.2 3-1.2H20M17.5 4.5 20 7l-2.5 2.5M17.5 14.5 20 17l-2.5 2.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
 const DOWNLOAD_SVG = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v10.5M7.5 10 12 14.5 16.5 10M5 19.5h14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
 const PIN_SVG = `<svg viewBox="0 0 24 24" aria-hidden="true"><path class="pin-head" d="M9 3.5h6l-1 5.5 3.5 4h-11L10 9z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M12 13v7.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>`;
+const STAR_SVG = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.8l2.5 5.2 5.7.8-4.1 4 1 5.7-5.1-2.7-5.1 2.7 1-5.7-4.1-4 5.7-.8z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>`;
+
+/** A lecture's star: lit while it is important (as lectures are at first); a tap switches it. */
+function importanceButton(it, important) {
+  const name = it.name.replace(/\.[^.]+$/, "");
+  const b = el("button", { type: "button", className: "lib-star", innerHTML: STAR_SVG,
+    title: important ? "Important (tap: not important, left out of Play by tag)" : "Not important: left out of Play by tag (tap: important)" });
+  b.setAttribute("aria-label", `Important: ${name}`);
+  b.setAttribute("aria-pressed", String(important));
+  b.addEventListener("click", () => setImportant([it], !important));
+  return b;
+}
+/** Marks lectures important (or not), on every device: unimportant.json. Play by tag leaves out the
+ *  ones not important; they stay in their folder. The toast's Undo reverses it. */
+async function setImportant(items, important) {
+  const n = items.length, what = n === 1 ? `“${items[0].name.replace(/\.[^.]+$/, "")}”` : `${n} lectures`;
+  const done = library.unimportant.write(items.map((it) => it.hash), !important, (cur) => withUnimportant(cur, items, !important),
+    `Mark ${n === 1 ? items[0].name : `${n} files`} ${important ? "important" : "not important"}`);
+  drawLibrary();
+  drawThisLecture();
+  try {
+    await done;
+    toast(important ? `${what} is important again.` : `${what}: not important, left out of Play by tag.`, "Undo", () => setImportant(items, !important));
+  } catch (err) {
+    toast(`Couldn't change ${what}: ${err.message}`);
+  }
+  drawLibrary();
+  drawThisLecture();
+}
+
+// ---------------------------------------------------------------- folder tags
+// A folder's tags (tags.json, shared by the devices) group it with others for Play by tag. The open
+// folder's Add tags / Edit tags opens the editor: the tags it has, a box for new ones (commas make
+// several), and the tags other folders have, to add with a tap. Save writes them.
+let tagEdit = null;   // {folder, name, tags}
+function editTags(folder, name) {
+  tagEdit = { folder, name, tags: [...(library.tags.set.get(folder.toLowerCase()) || [])] };
+  $("tagTitle").textContent = `Tags of “${name}”`;
+  $("tagInput").value = "";
+  drawTagEdit();
+  $("tagDialog").showModal();
+}
+function drawTagEdit() {
+  const mine = new Set(tagEdit.tags.map((t) => t.toLowerCase())), others = allTags(library.tags.set).filter((t) => !mine.has(t.toLowerCase()));
+  $("tagChips").replaceChildren(...(tagEdit.tags.length ? tagEdit.tags.map((t) => {
+    const x = el("button", { type: "button", className: "tag-x", textContent: "×" });
+    x.setAttribute("aria-label", `Remove the tag ${t}`);
+    x.addEventListener("click", () => { tagEdit.tags = tagEdit.tags.filter((o) => o !== t); drawTagEdit(); });
+    return el("li", { className: "tag" }, t, x);
+  }) : [el("li", { className: "small", textContent: "No tags yet." })]));
+  $("tagOthersLine").hidden = !others.length;
+  $("tagOthers").replaceChildren(...others.map((t) => {
+    const b = el("button", { type: "button", className: "chip", textContent: `+ ${t}` });
+    b.addEventListener("click", () => addTags(t));
+    return b;
+  }));
+}
+/** Adds typed tags (commas between them), spelled as other folders' tags already are. */
+function addTags(text) {
+  const inUse = new Map(allTags(library.tags.set).map((t) => [t.toLowerCase(), t]));
+  tagEdit.tags = cleanTags([...tagEdit.tags, ...cleanTags(text.split(",")).map((t) => inUse.get(t.toLowerCase()) ?? t)]);
+  drawTagEdit();
+}
+$("tagAdd").addEventListener("click", () => { addTags($("tagInput").value); $("tagInput").value = ""; $("tagInput").focus(); });
+$("tagInput").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); $("tagAdd").click(); } });
+$("tagCancel").addEventListener("click", () => $("tagDialog").close());
+$("tagSave").addEventListener("click", async () => {
+  if ($("tagInput").value.trim()) addTags($("tagInput").value);   // typed, but Add not tapped
+  const { folder, name } = tagEdit, tags = cleanTags(tagEdit.tags), key = folder.toLowerCase(), map = library.tags.set, before = map.get(key);
+  $("tagDialog").close();
+  const put = (t) => (t?.length ? map.set(key, t) : map.delete(key));
+  const done = library.tags.send(() => put(tags), () => put(before), (cur) => withTags(cur, folder, tags),
+    `Tag ${folder || "the top level"}: ${tags.join(", ") || "no tags"}`);
+  drawLibrary();
+  try {
+    await done;
+    toast(tags.length ? `“${name}”: ${tags.join(", ")}.` : `“${name}” has no tags now.`);
+  } catch (err) {
+    toast(`Couldn't save the tags of “${name}”: ${err.message}`);
+  }
+  drawLibrary();
+});
+
+// ---------------------------------------------------------------- play by tag
+// The start screen's Play by tag: choose tags, and All, New or Played; the list has the lectures of
+// the folders with any of the tags, by folder (as in the library) and by name, without the ones not
+// important or hidden. Play in order plays them one after another, Shuffle in random order (none
+// twice until all have played); a lecture in the list starts the order there. The choice is kept on
+// this device.
+function tagChoice() {
+  const p = prefs.tagPick ?? {}, inUse = new Set(allTags(library.tags.set).map((t) => t.toLowerCase()));
+  return { tags: new Set((Array.isArray(p.tags) ? p.tags : []).filter((t) => inUse.has(t))), status: ["new", "played"].includes(p.status) ? p.status : "all" };
+}
+function setTagChoice(change) {
+  const { tags, status } = { ...tagChoice(), ...change };
+  prefs.tagPick = { tags: [...tags], status };
+  savePrefs();
+  drawTagPlay();
+}
+/** The list for the tags chosen, and how many lectures not important it leaves out. */
+function tagChoiceList() {
+  const { tags, status } = tagChoice(), opts = { pinned: library.pinned.set, status, isNew };
+  const list = tagList(library.items, library.tags.set, tags, { ...opts, leave: (i) => library.hidden.has(i.hash) || library.unimportant.has(i.hash) });
+  const minor = tagList(library.items, library.tags.set, tags, { ...opts, leave: (i) => library.hidden.has(i.hash) }).length - list.length;
+  return { list, minor };
+}
+function drawTagPlay() {
+  const all = allTags(library.tags.set), { tags, status } = tagChoice(), { list, minor } = tagChoiceList();
+  $("tpTags").replaceChildren(...all.map((t) => {
+    const b = el("button", { type: "button", className: "chip", textContent: t }), on = tags.has(t.toLowerCase());
+    b.setAttribute("aria-pressed", String(on));
+    b.addEventListener("click", () => { const next = new Set(tags); on ? next.delete(t.toLowerCase()) : next.add(t.toLowerCase()); setTagChoice({ tags: next }); });
+    return b;
+  }));
+  $("tpNoTags").hidden = all.length > 0;
+  for (const r of $("tagPlayDialog").querySelectorAll("input[name=tpStatus]")) r.checked = r.value === status;
+  const folders = new Set(list.map((i) => i.folder)).size;
+  $("tpSays").textContent = !all.length ? "" : !tags.size ? "Choose one or more tags." : !list.length ? "No lectures." :
+    `${list.length} lecture${list.length === 1 ? "" : "s"} in ${folders} folder${folders === 1 ? "" : "s"}` +
+    (minor ? `; ${minor} not important left out.` : ".");
+  let folder = null;
+  $("tpList").replaceChildren(...list.flatMap((it) => {
+    const rows = [];
+    if (it.folder !== folder) rows.push(el("li", { className: "tp-folder", textContent: folderTitle((folder = it.folder)) }));
+    const meta = [isNew(it) ? "New" : "", it.entry?.duration_ms ? clock(it.entry.duration_ms / 1000) : "", it.status === "ready" ? "" : BADGES[it.status][0]];
+    const b = el("button", { type: "button", className: "tp-item" }, el("span", { className: "lib-title", textContent: it.name.replace(/\.[^.]+$/, "") }),
+      el("span", { className: "lib-meta", textContent: meta.filter(Boolean).join(" · ") }));
+    b.addEventListener("click", () => playList(list, it, false));
+    rows.push(el("li", {}, b));
+    return rows;
+  }));
+  $("tpPlay").disabled = $("tpShuffle").disabled = !list.length;
+}
+$("tagPlayBtn").addEventListener("click", () => { drawTagPlay(); $("tagPlayDialog").showModal(); });
+for (const r of $("tagPlayDialog").querySelectorAll("input[name=tpStatus]")) r.addEventListener("change", () => setTagChoice({ status: r.value }));
+$("tpClose").addEventListener("click", () => $("tagPlayDialog").close());
+$("tpPlay").addEventListener("click", () => playList(tagChoiceList().list, null, false));
+$("tpShuffle").addEventListener("click", () => playList(tagChoiceList().list, null, true));
+/** Plays a list by tag: in order from `first` (else its first lecture), or shuffled. */
+function playList(list, first, shuffle) {
+  if (!list.length) return;
+  $("tagPlayDialog").close();
+  const label = [...tagChoice().tags].map((t) => allTags(library.tags.set).find((x) => x.toLowerCase() === t) ?? t).join(", ");
+  const start = first ?? (shuffle ? randomOther(list, null) : list[0]);
+  setEndMode(shuffle ? "shuffle" : "next");
+  playItem(start, { list, label, played: new Set() });
+}
 
 /** Pins a folder to the top of the list (pin false: back in its place), on every device: pinned.json. */
 async function setPinned(folder, pin, name) {
@@ -667,15 +839,19 @@ async function dropboxMediaInfo(it) {
   return got.info.durationSec || !(e?.duration_ms > 0) ? got : { ...got, info: { ...got.info, durationSec: e.duration_ms / 1000 } };
 }
 
-/** Streams a library video: with its transcript when it has one, else playing while it waits. */
-async function openFromDropbox(it) {
+/** Streams a library video: with its transcript when it has one, else playing while it waits. It
+ *  plays among `within` (a scope: a list by tag, or the folder it is stepped through), else among its
+ *  folder's lectures. */
+async function openFromDropbox(it, within) {
+  allowPlay(bg);      // a tap in the list: the lecture may go on in the background later,
+  allowPlay(video);   // and one from Play by tag starts by itself
   if (!dbx || library.opening) return;
   library.opening = true;
   setProblems([]);
   $("libNote").textContent = `Opening ${it.name}…`;
   try {
     const { info, fingerprint, audio, art } = await dropboxMediaInfo(it);
-    const { link } = await dbx.temporaryLink(it.path);
+    const { link, fetched } = await linkFor(it.path);
     const picked = { url: link, name: it.name, size: it.size, info, fingerprint, audio: !!audio, art: art ?? null,
       dropbox: { path: it.path, hash: it.hash } };
     // an entry found by name and size must be this very video
@@ -688,7 +864,10 @@ async function openFromDropbox(it) {
       openWaiting(picked);
     }
     if (S.picked === picked) {
-      stream = { path: it.path, fetched: Date.now(), renewing: false, lastError: 0 };
+      stream = { path: it.path, fetched, renewing: false, lastError: 0 };
+      scope = within ?? { folder: it.folder, played: new Set() };
+      drawSteps();
+      fetchAhead();
       trackVideo(picked, entry);
     }
   } catch (err) {
@@ -700,23 +879,27 @@ async function openFromDropbox(it) {
 }
 
 // A Dropbox link lasts 4 hours: it is renewed before then, and at once when the video stops with an
-// error (an expired link), keeping the position and whether it was playing.
+// error (an expired link), keeping the position and whether it was playing. While the app is hidden
+// the sound plays on from the old link, unless that stopped it.
 let stream = null;   // {path, fetched, renewing, lastError}
 async function renewStream() {
   const s = stream;
   if (!s || s.renewing || !dbx) return;
   s.renewing = true;
   const at = video.currentTime, playing = S.playing;   // read at once: an expired link also pauses the video
+  const bgAt = bg.currentTime, bgStopped = bgOn && !!bg.error;
   try {
     const { link } = await dbx.temporaryLink(s.path);
     if (stream !== s) return;
     s.fetched = Date.now();
+    links.set(s.path, { link, fetched: s.fetched });
     S.picked.url = S.videoUrl = link;
+    if (bgStopped && bgOn) playHidden(bgAt);
     S.swapping = true;
     video.addEventListener("loadedmetadata", () => {
       video.currentTime = at;
       S.swapping = false;
-      if (playing) video.play().catch(() => {});
+      if (playing && !bgOn) video.play().catch(() => {});
     }, { once: true });
     video.src = link;
   } catch (err) {
@@ -954,13 +1137,14 @@ function showVideo(picked, resumeAt = 0) {
   S.videoUrl = picked.file ? URL.createObjectURL(picked.file) : picked.url;
   Object.assign(S, { picked, videoName: name, swapping: false, playing: false, folder: lectureFolder(picked) });
   setNotesOpen(false);   // they belong to the lecture before
-  hideUpNext();
+  scope = null;          // openFromDropbox sets it
   noteInput.value = "";
   noteInput.style.height = "";
   draftAt = null;
   corsFor(picked);
   video.src = S.videoUrl;
-  applyRate((S.folder != null && prefs.folderRates[S.folder.toLowerCase()]) || prefs.rate, false);
+  loadBg();
+  applyRate(folderRate(S.folder), false);
   $("welcome").hidden = true;
   player.hidden = false;
   document.title = `${name.replace(/\.[^.]+$/, "")} · Lecture Karaoke`;
@@ -968,10 +1152,12 @@ function showVideo(picked, resumeAt = 0) {
   layout();
   resize();
   setLook();
+  const dur = picked.info?.durationSec, quiet = document.hidden;
+  S.startAt = resumeAt > 5 && !(dur && resumeAt >= dur - 10) ? resumeAt : 0;   // also where bg starts it (playHidden)
   video.addEventListener("loadedmetadata", () => {
     if (resumeAt > 5 && resumeAt < video.duration - 10) {
       video.currentTime = resumeAt;
-      toast(`Resumed at ${clock(resumeAt)}`, "Start over", () => (video.currentTime = 0));
+      if (!quiet) toast(`Resumed at ${clock(resumeAt)}`, "Start over", () => (video.currentTime = 0));
     }
   }, { once: true });
 }
@@ -1679,6 +1865,7 @@ function setHighlight(changes, keep = true) {
 function applyHighlight() {
   const c = highlightColor(), { color, soft, strength } = prefs.hi, preset = HI_COLORS.some(([, p]) => p === color);
   document.documentElement.style.setProperty("--said", c);
+  document.documentElement.style.setProperty("--chosen", color);   // the end mode button, every time
   viz.color = c;
   viz.draw();
   for (const radio of $("hiColors").querySelectorAll("input[type=radio]")) {
@@ -1705,12 +1892,19 @@ video.addEventListener("loadedmetadata", captionsOff);
 video.textTracks.addEventListener?.("addtrack", captionsOff);
 
 // ---------------------------------------------------------------- controls
-const togglePlay = () => (video.paused ? video.play().catch(() => {}) : video.pause());
+const togglePlay = () => (media().paused ? resume() : pausePlayback());
 $("playBtn").addEventListener("click", togglePlay);
 video.addEventListener("play", () => { S.playing = true; $("playBtn").textContent = "❚❚"; $("playBtn").ariaLabel = "Pause"; keepAwake(true); });
 video.addEventListener("playing", () => queuePlayed([playingFile()]));
 video.addEventListener("pause", () => {
-  if (!S.swapping) S.playing = false;
+  if (video.ended) S.playing = false;
+  else if (S.playing && !S.swapping && !S.handing && !bgOn && !player.hidden) {
+    // Not the viewer's pause (pausePlayback): iPhone's, as the app goes to the background, which may
+    // be said just before or after. Hidden, the sound goes on from bg; still on screen, it stays paused.
+    const handOver = () => (BG && document.hidden && hasPicture() ? playHidden() : (S.playing = false));
+    if (document.hidden) handOver();
+    else setTimeout(() => { if (video.paused && S.playing && !bgOn) handOver(); }, 1000);
+  }
   $("playBtn").textContent = "▶︎";
   $("playBtn").ariaLabel = "Play";
   keepAwake(false);
@@ -1732,7 +1926,7 @@ function setEditing(on) {
   S.editing = on;
   panel.classList.toggle("editing", on);
   $("editBtn").setAttribute("aria-pressed", String(on));
-  if (on) { video.pause(); toast("Tap a word to fix it"); }
+  if (on) { pausePlayback(); toast("Tap a word to fix it"); }
 }
 const fmtRate = (r) => `${+r.toFixed(2)}×`;
 const fmtOffset = (ms) => `${ms > 0 ? "+" : ms < 0 ? "−" : "±"}${+Math.abs(ms / 1000).toFixed(2)} s`;
@@ -1783,10 +1977,11 @@ panel.addEventListener("click", (e) => {
 // Two rows of parts (data-el in index.html), arranged by the viewer and kept on this device:
 // Settings → Arrange the buttons, then tap a part and move it. Settings itself can't be hidden,
 // so the bar can always be arranged again.
-const BAR_DEFAULT = { rows: [["progress", "highlight", "timing", "notes", "lock", "fullscreen"],
-  ["back", "rewind", "play", "forward", "speed", "fix", "settings"]], hidden: [] };
+const BAR_DEFAULT = { rows: [["progress", "highlight", "timing", "notes", "fix", "lock", "endmode", "sleep", "fullscreen", "settings"],
+  ["back", "previous", "rewind", "play", "forward", "next", "speed"]], hidden: [] };
 const BAR_LABELS = { progress: "Progress bar", highlight: "Soft highlight", lock: "Lock", back: "Back", rewind: "−5s", play: "Play",
-  forward: "+5s", speed: "Speed", timing: "Timing", fix: "Fix", settings: "Settings", fullscreen: "Full screen", notes: "Notes" };
+  forward: "+5s", speed: "Speed", timing: "Timing", fix: "Fix", settings: "Settings", fullscreen: "Full screen", notes: "Notes",
+  previous: "Previous lecture", next: "Next lecture", endmode: "End mode", sleep: "Sleep timer" };
 // Kept here, not looked up: a part taken out of the bar is detached for a moment and couldn't be found.
 const PARTS = new Map([...bar.querySelectorAll("[data-el]")].map((el) => [el.dataset.el, el]));
 const barPart = (id) => PARTS.get(id);
@@ -2350,84 +2545,349 @@ function syncNotes() {
   return notesSyncing;
 }
 
-// ---------------------------------------------------------------- when a lecture ends
-// When a lecture from the Dropbox library ends, a card offers: back to the folder list, the next
-// lecture in its folder (library order; hidden files are passed over), a random one from the folder,
-// and those two for the rest of the session. With "Keep playing …" each lecture that ends is followed
-// by the next (or a random) one after AUTO_NEXT_S seconds, which Stop (or any other choice) cancels,
-// until the viewer goes back to the folder list or closes the app. Random lectures are transcribed
-// ones when there are any, and none comes twice until all of the folder's have played.
-const AUTO_NEXT_S = 5;
-const session = { mode: null, played: new Set() };   // mode: "next" | "random" | null; played: paths, for random
-let ending = null;   // the card: {now, next, random, left, timer}
+// ---------------------------------------------------------------- one lecture after another
+// A lecture opened from the library plays among its folder's (the library's order, hidden ones
+// passed over); Play by tag gives a list instead. The bar's previous and next buttons go through it
+// in that order, whatever the end mode. The end mode button says what happens when a lecture ends:
+// stay; the next one, once (then stay) or every time; a random one (transcribed ones first, none
+// twice until all have played), once or every time. "Every time" is drawn in the highlight color.
+// The mode is kept on this device.
+let scope = null;   // {folder} or {list, label}, with played: the paths played in it (for random)
 const lectureTitle = (it) => it.name.replace(/\.[^.]+$/, "");
-video.addEventListener("ended", () => {
+/** The lectures the open one plays among. */
+function scopeList() {
+  if (!scope) return [];
+  return scope.list ?? library.items.filter((i) => i.folder === scope.folder && !library.hidden.has(i.hash));
+}
+const scopeName = () => (scope?.list ? "in the list" : "in this folder");
+/** The library's item for the lecture open: streamed from Dropbox, or a copy of one (the same video). */
+function openItem() {
   const d = S.picked?.dropbox, fp = S.picked?.fingerprint;
-  const now = library.items.find((i) => (d?.path ? i.path === d.path : fp && i.entry?.fingerprint === fp));
-  if (now) showEnding(now);
-});
-video.addEventListener("play", () => hideUpNext());
-function showEnding(now) {
-  hideUpNext();
-  session.played.add(now.path);
-  const skip = (i) => library.hidden.has(i.hash);
-  const next = nextInFolder(library.items, now, skip);
-  let random = randomInFolder(library.items, now, session.played, skip);
-  if (random && session.played.has(random.path)) {   // all of the folder's have played: a new round
-    session.played = new Set([now.path]);
-    random = randomInFolder(library.items, now, session.played, skip);
+  return library.items.find((i) => (d?.path ? i.path === d.path : fp && i.entry?.fingerprint === fp)) ?? null;
+}
+/** Opens a library lecture and plays it: among `within` (a scope), else among its folder's. */
+async function playItem(it, within) {
+  const fresh = library.items.find((i) => i.path === it.path) ?? it;   // a list keeps its items as they were
+  await openFromDropbox(fresh, within);
+  if (S.picked?.dropbox?.path === fresh.path) resume();
+}
+/** The scope; a lecture opened another way that is in the library too (a copy on this device) plays
+ *  among its folder's. */
+function ensureScope() {
+  const now = !scope && openItem();
+  if (now) scope = { folder: now.folder, played: new Set() };
+  return scope;
+}
+/** The bar's previous (-1) and next (1) buttons, and the lock screen's. */
+function stepLecture(dir) {
+  allowPlay(bg);
+  const now = ensureScope() && openItem(), it = now && neighbor(scopeList(), now, dir);
+  if (!it) return;
+  scope.coming = null;
+  startHidden(it);   // from the lock screen
+  playItem(it, scope);
+}
+function drawSteps() {
+  const now = ensureScope() && openItem(), list = scopeList(), can = (dir) => !!(now && neighbor(list, now, dir));
+  $("prevBtn").disabled = !can(-1);
+  $("nextBtn").disabled = !can(1);
+  setAction("previoustrack", can(-1) ? () => stepLecture(-1) : null);
+  setAction("nexttrack", can(1) ? () => stepLecture(1) : null);
+  drawEndMode();   // it names the folder or the list
+}
+$("prevBtn").addEventListener("click", () => stepLecture(-1));
+$("nextBtn").addEventListener("click", () => stepLecture(1));
+/** A random lecture to follow `now`: transcribed ones first, none twice until all have played. */
+function pickRandom(now) {
+  scope.played.add(now.path);
+  let it = randomOther(scopeList(), now, scope.played);
+  if (it && scope.played.has(it.path)) {   // all of them have played: a new round
+    scope.played = new Set([now.path]);
+    it = randomOther(scopeList(), now, scope.played);
   }
-  if ((session.mode === "next" && !next) || (session.mode === "random" && !random)) session.mode = null;   // nothing to go on with
-  ending = { now, next, random, left: AUTO_NEXT_S, timer: 0 };
-  $("upNextHead").textContent = `The lecture has ended · “${folderTitle(now.folder)}”`;
-  $("upNextTitle").textContent = next ? `Next in this folder: ${lectureTitle(next)}` : "That was the last lecture in this folder.";
-  $("upNextPlay").disabled = $("endKeepNext").disabled = !next;
-  $("endRandom").disabled = $("endKeepRandom").disabled = !random;
-  $("upNext").hidden = false;
-  if (session.mode) ending.timer = setInterval(() => (--ending.left > 0 ? drawEnding() : playLecture(session.mode)), 1000);
-  drawEnding();
+  return it;
 }
-function drawEnding() {
-  $("endKeepNext").setAttribute("aria-pressed", String(session.mode === "next"));
-  $("endKeepRandom").setAttribute("aria-pressed", String(session.mode === "random"));
-  $("endCountLine").hidden = !ending?.timer;
-  if (ending?.timer) {
-    const it = session.mode === "next" ? ending.next : ending.random;
-    $("upNextCount").textContent = `${session.mode === "next" ? "Next" : "A random one"}: “${lectureTitle(it)}” in ${ending.left} s.`;
+/** When a lecture ends: what the end mode says (a random one as picked ahead, fetchAhead). */
+function lectureEnded() {
+  const mode = prefs.endMode, now = ensureScope() && openItem();
+  if (mode === "stay" || !now) return;
+  const coming = scope.coming;
+  scope.coming = null;
+  const it = mode.startsWith("next") ? neighbor(scopeList(), now, 1)
+    : coming && coming.path !== now.path && scopeList().some((i) => i.path === coming.path) ? coming : pickRandom(now);
+  if (!it) return toast(mode.startsWith("next") ? `That was the last lecture ${scopeName()}.` : `There is no other lecture ${scopeName()}.`);
+  startHidden(it);   // the app hidden: at once, or the phone won't let it start
+  setEndMode(spentEndMode(mode));
+  playItem(it, scope);
+}
+const END_LOOKS = {
+  stay: { svg: () => STAY_SVG, says: "When a lecture ends, it stays there." },
+  next1: { svg: () => LIST_SVG, says: () => `When this lecture ends, the next one ${scopeName()} plays (once).` },
+  next: { svg: () => LIST_SVG, says: () => `When a lecture ends, the next one ${scopeName()} plays, every time.`, always: true },
+  shuffle1: { svg: () => SHUFFLE_SVG, says: () => `When this lecture ends, a random one ${scopeName()} plays (once).` },
+  shuffle: { svg: () => SHUFFLE_SVG, says: () => `When a lecture ends, a random one ${scopeName()} plays, every time.`, always: true },
+};
+const endSays = () => { const s = END_LOOKS[prefs.endMode].says; return typeof s === "function" ? s() : s; };
+function setEndMode(mode, tell = false) {
+  prefs.endMode = mode;
+  savePrefs();
+  drawEndMode();
+  if (tell) toast(endSays());
+}
+function drawEndMode() {
+  const b = $("endBtn"), look = END_LOOKS[prefs.endMode];
+  b.innerHTML = look.svg();
+  b.classList.toggle("always", !!look.always);
+  b.setAttribute("aria-label", `End mode: ${endSays()}`);
+  b.title = endSays();
+}
+$("endBtn").addEventListener("click", () => { setEndMode(nextEndMode(prefs.endMode), true); fetchAhead(); });
+const STAY_SVG = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 12h11M10.5 7l5 5-5 5M20 5v14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+const LIST_SVG = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 6h12M3.5 11h8M3.5 16h6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M14.5 13v8l6.5-4z" fill="currentColor"/></svg>`;
+
+// ---------------------------------------------------------------- sleep timer
+// The moon button: playback pauses after the minutes chosen. While it runs the button is lit and the
+// dialog says how long is left. A timer checks, and so does the lecture as it plays (timers may wait
+// while the app is in the background).
+const SLEEP_PRESETS = [5, 10, 15, 20, 30, 45, 60, 90];
+let sleep = null;   // {at, timer}
+function setSleep(min) {
+  clearTimeout(sleep?.timer);
+  sleep = min > 0 ? { at: Date.now() + min * 60000, timer: setTimeout(checkSleep, min * 60000 + 100) } : null;
+  drawSleep();
+}
+function checkSleep() {
+  if (!sleep || Date.now() < sleep.at) return;
+  setSleep(0);
+  pausePlayback();
+  toast("Sleep timer: paused.");
+}
+function drawSleep() {
+  const left = sleep ? clock(Math.max(0, sleep.at - Date.now()) / 1000) : "";
+  $("sleepBtn").setAttribute("aria-pressed", String(!!sleep));
+  $("sleepBtn").title = sleep ? `Sleep timer: pauses in ${left}` : "Sleep timer";
+  $("sleepSays").textContent = sleep ? `Pauses in ${left}.` : "Pauses playback after the minutes you choose.";
+  $("sleepOff").hidden = !sleep;
+}
+setInterval(() => { if (sleep) { checkSleep(); if (sleep && $("sleepDialog").open) drawSleep(); } }, 1000);
+function startSleep(min) {
+  $("sleepDialog").close();
+  setSleep(min);
+  toast(`Sleep timer: pauses in ${min} minute${min === 1 ? "" : "s"}.`);
+}
+$("sleepPresets").append(...SLEEP_PRESETS.map((m) => {
+  const b = el("button", { type: "button", className: "chip", textContent: `${m} min` });
+  b.addEventListener("click", () => startSleep(m));
+  return b;
+}));
+$("sleepBtn").addEventListener("click", () => {
+  $("sleepMin").value = prefs.sleepMin || 30;
+  drawSleep();
+  $("sleepDialog").showModal();
+});
+$("sleepStart").addEventListener("click", () => {
+  const m = Math.round(Number($("sleepMin").value));
+  if (!(m >= 1 && m <= 600)) return $("sleepMin").focus();
+  prefs.sleepMin = m;
+  savePrefs();
+  startSleep(m);
+});
+$("sleepMin").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); $("sleepStart").click(); } });
+$("sleepOff").addEventListener("click", () => { setSleep(0); $("sleepDialog").close(); toast("Sleep timer off."); });
+$("sleepCancel").addEventListener("click", () => $("sleepDialog").close());
+
+// ---------------------------------------------------------------- the lock screen, and playing on in the background
+// A phone stops a video, sound and all, when the screen locks or the app goes to the background
+// (iPhone does so with anything that has a picture), but lets audio play on. So on a phone the open
+// lecture is loaded in an audio element too (bg: its index, not the whole stream), and when the app is
+// hidden while it plays, the sound goes on from bg, from the same moment at the same speed; back in
+// the app the video takes over from where bg is. The phone allows that only straight away (within a
+// second or two of the sound stopping), and a lecture that ends while the app is hidden is followed
+// the same way: so the links of the lectures that may come next (the end mode's, and the previous and
+// next ones for the lock screen's buttons) are fetched ahead, and bg starts the one that comes at once.
+// A recording plays on by itself. The lock screen shows the lecture and whether it plays, with
+// play/pause, the position, and the previous and next lectures.
+const BG = isMobile;   // a computer plays on in the background by itself
+const bg = Object.assign(document.createElement("audio"), { preload: "metadata" });
+let bgOn = false, bgUrl = "", bgLecture = null;   // bgOn: the sound comes from bg; bgUrl: its stream, of bgLecture (S.picked; null while just started)
+/** The element the lecture plays from: the video, or bg while the app is hidden. */
+const media = () => (bgOn ? bg : video);
+const hasPicture = () => !(S.picked?.audio || (video.readyState && !video.videoWidth));
+const folderRate = (folder) => (folder != null && prefs.folderRates[folder.toLowerCase()]) || prefs.rate;
+const mediaSession = "mediaSession" in navigator ? navigator.mediaSession : null;
+/** Sets a lock-screen (Media Session) action, or takes it away (null). */
+function setAction(name, fn) {
+  try { mediaSession?.setActionHandler(name, fn); } catch { /* not this one here */ }
+}
+/** A phone lets an element play by itself only once a tap has played it: the first tap that leads to
+ *  playing gives bg (and the video, for a lecture that will start by itself) a moment of that, muted
+ *  and paused at once. */
+const unlocked = new WeakSet();
+function allowPlay(el) {
+  const tap = navigator.userActivation?.isActive;
+  if (!isMobile || unlocked.has(el) || tap === false || !el.paused || (el === bg && bgOn)) return;
+  if (tap) unlocked.add(el);   // a browser that can't tell tries again on the next tap
+  if (el === bg) try { if (navigator.audioSession) navigator.audioSession.type = "playback"; } catch { /* not here */ }
+  const muted = el.muted;
+  el.muted = true;
+  el.play().catch(() => {});
+  el.pause();
+  el.muted = muted;
+}
+/** bg loads the lecture opened, ready to take over. */
+function loadBg() {
+  if (!BG || bgOn || !S.videoUrl || bgUrl === S.videoUrl) return;
+  bgUrl = S.videoUrl;
+  bg.src = bgUrl;
+  bgLecture = S.picked;
+}
+/** Plays the open lecture: the video, or bg while the app is hidden. */
+function resume() {
+  allowPlay(bg);
+  if (player.hidden || !S.videoUrl) return;
+  if (BG && document.hidden) playHidden();
+  else video.play().catch(() => {});
+}
+function pausePlayback() {
+  S.playing = false;
+  media().pause();
+}
+/** The sound from bg at once, at the video's speed: from `at` s, else from where bg is (the same
+ *  lecture), or the video, or where a lecture just opened starts (S.startAt). The video pauses, also
+ *  so that the phone doesn't play it again when it is unlocked. */
+function playHidden(at) {
+  const same = bgUrl === S.videoUrl && (bgLecture === S.picked || !bgLecture);
+  if (bgOn && same && !bg.paused && at == null) {   // started already (startHidden): now it is open
+    bgLecture = S.picked;
+    queuePlayed([playingFile()]);
+    const now = ensureScope() && openItem();
+    if (now) scope.played.add(now.path);
+    return;
+  }
+  at ??= same && bgOn ? bg.currentTime : video.readyState ? video.currentTime : S.startAt;
+  if (bgUrl !== S.videoUrl || !bg.readyState) {
+    bgUrl = S.videoUrl;
+    bg.src = `${bgUrl}#t=${at.toFixed(3)}`;   // a media fragment: from there
+  } else bg.currentTime = at;
+  bgLecture = S.picked;
+  bg.defaultPlaybackRate = bg.playbackRate = video.playbackRate;
+  startBg();
+  S.handing = true;   // not the viewer's pause
+  video.pause();
+  S.handing = false;
+}
+function startBg() {
+  const url = bgUrl;
+  bgOn = true;
+  S.playing = true;
+  bg.play().catch(() => {
+    if (bgUrl !== url || !bgOn || !bg.paused) return;
+    bgOn = false;   // not allowed now (the lock screen's play button is)
+    S.playing = false;
+    drawNowPlaying();
+  });
+}
+/** While the app is hidden: starts `it` from bg at once, from its link fetched ahead (else false). */
+function startHidden(it) {
+  const link = linkAhead(it.path);
+  if (!BG || !document.hidden || !link) return false;
+  bgUrl = link;
+  bg.src = `${link}#t=${(starts.get(it.path) ?? 0).toFixed(3)}`;
+  bgLecture = null;   // until it is open
+  bg.defaultPlaybackRate = bg.playbackRate = folderRate(it.folder);
+  startBg();
+  return true;
+}
+/** Back in the app: the video takes over from where bg is (once it has loaded a lecture bg started). */
+function toForeground() {
+  if (!bgOn) return;
+  const at = bg.currentTime, playing = !bg.paused && !bg.ended;
+  bgOn = false;
+  bg.pause();
+  if (bgLecture !== S.picked) return;
+  const go = () => {
+    video.currentTime = at;
+    if (playing) video.play().catch(() => {});
+    else drawNowPlaying();
+  };
+  if (video.readyState && !S.swapping) go();
+  else video.addEventListener("loadedmetadata", go, { once: true });
+}
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) toForeground();
+  else if (BG && S.playing && !bgOn && !player.hidden && !video.ended && hasPicture()) playHidden();
+});
+
+// The links of the lectures that may come next, fetched ahead (a link lasts 4 hours), and where each
+// would start (where it was left).
+const links = new Map(), starts = new Map();   // path → {link, fetched}; path → s
+async function linkFor(path) {
+  const got = links.get(path);
+  if (got && Date.now() - got.fetched < LINK_RENEW_MS) return got;
+  const { link } = await dbx.temporaryLink(path);
+  const fresh = { link, fetched: Date.now() };
+  links.set(path, fresh);
+  return fresh;
+}
+const linkAhead = (path) => { const got = links.get(path); return got && Date.now() - got.fetched < LINK_RENEW_MS ? got.link : null; };
+/** After a lecture opens, or the end mode changes: the lectures that may follow it, ready. */
+function fetchAhead() {
+  const now = BG && dbx && ensureScope() && openItem();
+  if (!now) return;
+  const list = scopeList();
+  if (prefs.endMode.startsWith("shuffle") && !scope.coming) scope.coming = pickRandom(now);
+  for (const it of new Set([neighbor(list, now, 1), neighbor(list, now, -1), scope.coming].filter(Boolean))) {
+    linkFor(it.path).catch(() => {});
+    startOf(it).then((at) => starts.set(it.path, at));
   }
 }
-function hideUpNext() {
-  if (ending) clearInterval(ending.timer);
-  ending = null;
-  $("upNext").hidden = true;
+/** Where a lecture would start: where it was left, as showVideo has it. */
+async function startOf(it) {
+  const rec = it.status === "ready" ? await store.load(it.entry?.id || it.name) : {};
+  const at = rec.position || 0, dur = (it.entry?.duration_ms || 0) / 1000;
+  return at > 5 && !(dur && at >= dur - 10) ? at : 0;
 }
-/** Plays the card's next ("next") or random lecture; keep: go on like that for the rest of the session. */
-async function playLecture(which, keep = true) {
-  const item = which === "next" ? ending?.next : ending?.random;
-  if (!item) return;
-  session.mode = keep ? which : null;
-  hideUpNext();
-  await openFromDropbox(item);
-  if (S.picked?.dropbox?.path === item.path && video.paused) video.play().catch(() => {});   // else the viewer taps play
+
+for (const el of [video, bg]) {
+  const mine = (fn) => () => { if (el === media()) fn(); };
+  el.addEventListener("ended", mine(lectureEnded));
+  el.addEventListener("playing", mine(() => { const now = ensureScope() && openItem(); if (now) scope.played.add(now.path); }));
+  el.addEventListener("timeupdate", mine(() => { if (sleep) checkSleep(); }));
+  for (const ev of ["playing", "pause", "ratechange", "seeked", "loadedmetadata", "ended"]) el.addEventListener(ev, mine(drawNowPlaying));
 }
-/** The start screen, with this folder open and in view in the library. */
-async function backToFolder(folder) {
-  openFolders.add(folder);
-  goHome();
-  await loadLibrary();
-  [...document.querySelectorAll(".lib-folder")].find((d) => d.dataset.folder === folder)?.scrollIntoView({ block: "start" });
-}
-$("endBack").addEventListener("click", () => ending && backToFolder(ending.now.folder));
-$("upNextPlay").addEventListener("click", () => playLecture("next", false));
-$("endKeepNext").addEventListener("click", () => playLecture("next"));
-$("endRandom").addEventListener("click", () => playLecture("random", false));
-$("endKeepRandom").addEventListener("click", () => playLecture("random"));
-$("upNextStay").addEventListener("click", () => {   // Stop: no more by itself; the card stays
-  session.mode = null;
-  clearInterval(ending?.timer);
-  if (ending) ending.timer = 0;
-  drawEnding();
+bg.addEventListener("playing", () => queuePlayed([playingFile()]));
+bg.addEventListener("error", () => {   // an expired link
+  if (!bgOn || !stream || Date.now() - stream.lastError < 20000) return;
+  stream.lastError = Date.now();
+  renewStream();
 });
+/** The lock screen's state: playing or not (once it really plays), and the position. */
+function drawNowPlaying() {
+  if (!mediaSession) return;
+  const m = media();
+  mediaSession.playbackState = player.hidden ? "none" : m.paused || m.ended ? "paused" : "playing";
+  if (!(m.duration > 0) || !isFinite(m.duration)) return;
+  try {
+    mediaSession.setPositionState({ duration: m.duration, playbackRate: m.playbackRate || 1, position: Math.min(m.currentTime, m.duration) });
+  } catch { /* not here */ }
+}
+setAction("play", resume);
+setAction("pause", pausePlayback);
+setAction("seekto", (d) => {
+  const m = media();
+  if (d.fastSeek && m.fastSeek) m.fastSeek(d.seekTime);
+  else m.currentTime = d.seekTime;
+});
+setAction("seekbackward", null);   // so the lock screen shows the previous and next lectures, not ±10 s
+setAction("seekforward", null);
+
+// ⋯ Settings → This lecture: a library lecture's star, as in the list.
+function drawThisLecture() {
+  const it = !player.hidden && openItem();
+  $("thisSet").hidden = !it;
+  if (it) $("thisImportant").checked = !library.unimportant.has(it.hash);
+}
+$("thisImportant").addEventListener("change", () => { const it = openItem(); if (it) setImportant([it], $("thisImportant").checked); });
 
 // ---------------------------------------------------------------- settings
 function openSettings() {
@@ -2441,6 +2901,7 @@ function openSettings() {
     S.audioOffsetMs ? `This file's audio starts ${S.audioOffsetMs} ms in; that is already allowed for.` : "";
   drawFixList();
   drawTranscriptLinks();
+  drawThisLecture();
   $("settings").showModal();
   renderGet();
 }
@@ -2466,13 +2927,14 @@ $("language").addEventListener("change", () => { S.language = $("language").valu
 function goHome() {
   if ($("settings").open) $("settings").close();
   setNotesOpen(false);
-  hideUpNext();
-  Object.assign(session, { mode: null, played: new Set() });   // "keep playing" lasts until the folder list
+  scope = null;
   if (arranging) setArranging(false);
   if (!lockLayer.hidden) setLocked(false);
-  video.pause();
+  pausePlayback();
+  bgOn = false;
   save();
   player.hidden = true;
+  drawNowPlaying();
   setLook();
   $("welcome").hidden = false;
   document.title = "Lecture Karaoke";
@@ -2611,13 +3073,13 @@ for (const [id, kind] of [["txText", "text"], ["txJson", "json"]]) {
 let toastTimer = 0;
 function save() {
   if (!S.id) return;
-  S.rec.position = video.currentTime || S.rec.position || 0;
+  S.rec.position = media().currentTime || S.rec.position || 0;
   Object.assign(S.rec, { syncMs: S.syncMs, language: S.language });
   delete S.rec.leadMs;        // 1.0.x kept the lead per transcript; it is a viewer preference now
   delete S.rec.lastLeadMs;
   store.save(S.id, structuredClone(S.rec));
 }
-setInterval(() => { if (!video.paused) save(); }, 5000);
+setInterval(() => { if (!media().paused) save(); }, 5000);
 addEventListener("pagehide", save);
 document.addEventListener("visibilitychange", () => {
   if (document.hidden) save();
@@ -2653,6 +3115,7 @@ function toast(text, actionLabel, action) {
 $("version").textContent = `v${VERSION}`;
 connect(ghConfig());
 renderBar();
+drawEndMode();
 drawRecent();
 addEventListener("online", () => syncFixes());
 let lastPull = 0;
@@ -2677,7 +3140,8 @@ $("reloadBtn").addEventListener("click", () => location.reload());
 if (dev) {
   window.__lk = { S, video, prefs, store, activeEvent, spokenCount, syncFixes, library, pickedVideo, openFromDropbox, renewStream,
     loadLibrary, pollTranscript, probeMedia, viz, get gh() { return gh; }, get dbx() { return dbx; }, get W() { return W; },
-    get stream() { return stream; }, get transfer() { return transfer; }, get audioGraph() { return audioGraph; } };   // for checks
+    get stream() { return stream; }, get transfer() { return transfer; }, get audioGraph() { return audioGraph; },
+    bg, get bgOn() { return bgOn; }, get scope() { return scope; } };   // for checks
   const q = new URLSearchParams(location.search);
   // ?pick=URL: as if that file had been picked on this device
   if (q.get("pick")) {

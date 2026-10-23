@@ -86,16 +86,6 @@ export function nextInFolder(items, current, skip = () => false) {
   return null;
 }
 
-/** A random lecture from now's folder other than now, passing over those skip() says to: one with a
- *  transcript when there are any, and among those one not in `played` (paths) while there are any;
- *  null when the folder has no other. */
-export function randomInFolder(items, now, played = new Set(), skip = () => false, random = Math.random) {
-  const others = items.filter((i) => i.folder === now.folder && i.path !== now.path && !skip(i));
-  const ready = others.filter((i) => i.status === "ready"), pool = ready.length ? ready : others;
-  const fresh = pool.filter((i) => !played.has(i.path));
-  return randomPick(fresh.length ? fresh : pool, random);
-}
-
 /** A random item to play: a transcribed one when the folder has any. */
 export function randomPick(items, random = Math.random) {
   const ready = items.filter((i) => i.status === "ready"), from = ready.length ? ready : items;
@@ -140,14 +130,62 @@ export const HIDDEN_FILE = "hidden.json";
 export const hiddenHashes = (data) => new Set(Object.keys(data?.files || {}));
 
 /** hidden.json with these items hidden (hide) or shown again, or undefined when nothing changes. */
-export function withHidden(data, items, hide, now = isoNow()) {
+export const withHidden = (data, items, hide, now = isoNow()) => withFiles(data, items, hide, "hidden", now);
+
+/** A file of files by content hash ({version: 1, files: {<hash>: {name, path, <stamp>: when}}}) with
+ *  these items in it (add) or not, or undefined when nothing changes. */
+function withFiles(data, items, add, stamp, now) {
   const files = { ...(data?.files || {}) };
   let changed = false;
   for (const it of items) {
-    if (hide && !files[it.hash]) { files[it.hash] = { name: it.name, path: it.path, hidden: now }; changed = true; }
-    else if (!hide && files[it.hash]) { delete files[it.hash]; changed = true; }
+    if (add && !files[it.hash]) { files[it.hash] = { name: it.name, path: it.path, [stamp]: now }; changed = true; }
+    else if (!add && files[it.hash]) { delete files[it.hash]; changed = true; }
   }
   return changed ? { ...(data || {}), version: 1, files } : undefined;
+}
+
+// Lectures marked not important, which lists by tag leave out (they stay in their folder):
+// unimportant.json in the repository, {version: 1, files: {<Dropbox content hash>: {name, path, marked}}}.
+export const UNIMPORTANT_FILE = "unimportant.json";
+export const unimportantHashes = (data) => new Set(Object.keys(data?.files || {}));
+
+/** unimportant.json with these items marked not important (on) or important again, or undefined
+ *  when nothing changes. */
+export const withUnimportant = (data, items, on, now = isoNow()) => withFiles(data, items, on, "marked", now);
+
+// Folders' tags: tags.json in the repository, {version: 1, folders: {<folder, in lower case>:
+// {folder, tags: [tag], updated}}}; a folder without tags has no entry. Case doesn't tell tags apart.
+export const TAGS_FILE = "tags.json";
+
+/** Tags as typed, tidied: trimmed, single spaces, at most 40 characters, each once (case aside). */
+export function cleanTags(tags) {
+  const seen = new Set(), out = [];
+  for (const t of Array.isArray(tags) ? tags : []) {
+    const tag = String(t ?? "").replace(/\s+/g, " ").trim().slice(0, 40).trim();
+    if (tag && !seen.has(tag.toLowerCase())) { seen.add(tag.toLowerCase()); out.push(tag); }
+  }
+  return out;
+}
+
+/** Each folder's tags: Map(folder in lower case → [tag]). */
+export const folderTags = (data) => new Map(Object.entries(data?.folders || {})
+  .map(([key, v]) => [key, cleanTags(v?.tags)]).filter(([, tags]) => tags.length));
+
+/** tags.json with this folder's tags (none: its entry goes), or undefined when it has them already. */
+export function withTags(data, folder, tags, now = isoNow()) {
+  const folders = { ...(data?.folders || {}) }, key = folder.toLowerCase(), clean = cleanTags(tags);
+  const cur = cleanTags(folders[key]?.tags);
+  if (cur.length === clean.length && cur.every((t, i) => t === clean[i])) return undefined;
+  if (clean.length) folders[key] = { folder, tags: clean, updated: now };
+  else delete folders[key];
+  return { ...(data || {}), version: 1, folders };
+}
+
+/** Every tag of these folders' (folderTags), each once in its first spelling, by name. */
+export function allTags(tagsByFolder) {
+  const byKey = new Map();
+  for (const tags of tagsByFolder.values()) for (const t of tags) if (!byKey.has(t.toLowerCase())) byKey.set(t.toLowerCase(), t);
+  return [...byKey.values()].sort(byName);
 }
 
 /** Items whose name or folder (as shown) has every word of the query (case and accents ignored). */

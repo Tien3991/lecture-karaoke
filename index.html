@@ -7,7 +7,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Karaoke">
-<meta name="app-version" content="2.10.0">
+<meta name="app-version" content="2.11.0">
 <meta name="description" content="Plays your lecture videos and audio recordings, from your device or your Dropbox, with live karaoke subtitles from their Soniox transcripts; new ones get transcribed on GitHub.">
 <title>Lecture Karaoke</title>
 <link rel="manifest" href="manifest.webmanifest">
@@ -51,6 +51,7 @@
         <button type="button" id="libHidden" class="linkish" title="The files hidden from this list (they stay in Dropbox)" hidden>Hidden</button>
       </span>
     </div>
+    <button type="button" id="tagPlayBtn" class="tag-play-btn"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 12.2V4.5a1 1 0 0 1 1-1h7.7l8.3 8.3a1.5 1.5 0 0 1 0 2.1l-6.1 6.1a1.5 1.5 0 0 1-2.1 0z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><circle cx="8" cy="8" r="1.7" fill="currentColor"/></svg>Play by tag</button>
     <input type="search" id="libSearch" class="lib-search" placeholder="Search" aria-label="Search the lectures in Dropbox" autocomplete="off" spellcheck="false">
     <p id="libNote" class="small lib-note" role="status"></p>
     <div id="libList" class="lib-list"></div>
@@ -116,6 +117,11 @@
       <button id="moreBtn" class="icon" data-el="settings" aria-label="Settings">⋯</button>
       <button id="lockBtn" class="icon" data-el="lock" aria-label="Lock the screen against touches"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 11V8a4 4 0 0 1 8 0v3" fill="none" stroke="currentColor" stroke-width="2.2"/><rect x="5" y="11" width="14" height="10" rx="2.5" fill="currentColor"/></svg></button>
       <button id="fsBtn" class="icon" data-el="fullscreen" aria-label="Full screen">⛶</button>
+      <button id="prevBtn" class="icon" data-el="previous" aria-label="Previous lecture" title="Previous lecture" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 5v14" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/><path d="M19 5.5v13L8.5 12z" fill="currentColor"/></svg></button>
+      <button id="nextBtn" class="icon" data-el="next" aria-label="Next lecture" title="Next lecture" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 5v14" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/><path d="M5 5.5v13L15.5 12z" fill="currentColor"/></svg></button>
+      <!-- What happens when a lecture ends (app.js, one lecture after another): a tap goes to the next of five. -->
+      <button id="endBtn" class="icon" data-el="endmode" aria-label="End mode"></button>
+      <button id="sleepBtn" class="icon" data-el="sleep" aria-pressed="false" aria-label="Sleep timer" aria-haspopup="dialog"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19.5 14.6A8 8 0 1 1 9.4 4.5a6.4 6.4 0 0 0 10.1 10.1z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg></button>
     </div>
   </div>
   <!-- Notes on this lecture (app.js, notes): a layer over the video and subtitles, which show through; the bar stays usable. -->
@@ -131,24 +137,13 @@
     <ul id="noteList" class="note-list" aria-label="Notes, the newest first"></ul>
     <p id="notesHint" class="notes-hint">Swipe a note left to delete it, right to edit it. Tap its time to go there.</p>
   </section>
-  <!-- When a lecture from Dropbox ends (app.js, when a lecture ends): what to play then. Over the video
-       and subtitles, down to the bar. -->
-  <div id="upNext" class="up-next-layer" hidden>
-    <section class="up-next" aria-label="The lecture has ended">
-      <p id="upNextHead" class="up-next-head"></p>
-      <p id="upNextTitle" class="up-next-title"></p>
-      <div class="up-next-choices">
-        <button type="button" id="endBack">Back to the folder list</button>
-        <button type="button" id="upNextPlay" class="primary">Next video</button>
-        <button type="button" id="endKeepNext" aria-pressed="false">Keep playing the next videos</button>
-        <button type="button" id="endRandom">A random video in this folder</button>
-        <button type="button" id="endKeepRandom" aria-pressed="false">Keep playing random videos in this folder</button>
-      </div>
-      <p id="endCountLine" class="up-next-count" hidden><span id="upNextCount" role="status"></span>
-        <button type="button" id="upNextStay" class="linkish">Stop</button></p>
-      <p class="small">“Keep playing” goes on until you go back to the folder list or close the app.</p>
-      <input type="checkbox" id="upNextAuto" hidden>   <!-- 2.9.0 scripts look it up at start -->
-    </section>
+  <!-- 2.9.0 and 2.10.0 showed a card when a lecture ended (the end mode button replaces it); their
+       scripts look these up at start, so they stay, hidden. -->
+  <div id="upNext" hidden>
+    <p id="upNextHead"></p><p id="upNextTitle"></p><span id="upNextCount"></span><p id="endCountLine"></p>
+    <button type="button" id="endBack"></button><button type="button" id="upNextPlay"></button><button type="button" id="endKeepNext"></button>
+    <button type="button" id="endRandom"></button><button type="button" id="endKeepRandom"></button><button type="button" id="upNextStay"></button>
+    <input type="checkbox" id="upNextAuto">
   </div>
   <!-- Touch lock (app.js setLocked): covers the player so nothing takes a touch; the lock has to be slid to the right. -->
   <div id="lock" class="lock" hidden>
@@ -164,6 +159,11 @@
 <dialog id="settings">
   <form method="dialog">
     <h2>Settings</h2>
+    <fieldset id="thisSet" hidden>
+      <legend>This lecture</legend>
+      <label class="check"><input type="checkbox" id="thisImportant"> Important</label>
+      <p class="small">Play by tag leaves out the lectures that aren't important. Kept on GitHub, for all your devices; the star beside each lecture in the list does the same.</p>
+    </fieldset>
     <fieldset id="txSet">
       <legend>Transcript</legend>
       <p class="tx-links"><a id="txText" href="#" download>Plain text (.txt)</a><a id="txJson" href="#" download>JSON (.json)</a></p>
@@ -285,6 +285,60 @@
     <div class="dialog-buttons">
       <button type="button" id="folderCancel">Cancel</button>
       <button type="button" id="folderSave" class="primary" disabled>Save ZIP</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="tagDialog">
+  <form method="dialog">
+    <h2 id="tagTitle">Tags</h2>
+    <p class="small top">Tags put folders together for <b>Play by tag</b> on the start screen. Kept on GitHub, for all your devices.</p>
+    <ul id="tagChips" class="tag-chips" aria-label="Its tags"></ul>
+    <div class="tag-add">
+      <input id="tagInput" placeholder="New tag" aria-label="New tag" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="done" maxlength="120">
+      <button type="button" id="tagAdd">Add</button>
+    </div>
+    <p id="tagOthersLine" class="tag-others"><span class="small">Other folders' tags:</span> <span id="tagOthers"></span></p>
+    <div class="dialog-buttons">
+      <button type="button" id="tagCancel">Cancel</button>
+      <button type="button" id="tagSave" class="primary">Save</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="tagPlayDialog">
+  <form method="dialog">
+    <h2>Play by tag</h2>
+    <div id="tpTags" class="tp-tags" role="group" aria-label="Tags (any of them)"></div>
+    <p id="tpNoTags" class="small top" hidden>No tags yet: open a folder in the list and tap <b>Add tags</b>.</p>
+    <div class="tp-status" role="radiogroup" aria-label="Played or not">
+      <label><input type="radio" name="tpStatus" value="all"> All</label>
+      <label><input type="radio" name="tpStatus" value="new"> New</label>
+      <label><input type="radio" name="tpStatus" value="played"> Played</label>
+    </div>
+    <p id="tpSays" class="small" role="status"></p>
+    <ul id="tpList" class="tp-list" aria-label="The lectures, in order"></ul>
+    <div class="dialog-buttons">
+      <button type="button" id="tpClose" class="left">Close</button>
+      <button type="button" id="tpShuffle">Shuffle</button>
+      <button type="button" id="tpPlay" class="primary">Play in order</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="sleepDialog">
+  <form method="dialog">
+    <h2>Sleep timer</h2>
+    <p id="sleepSays" class="small top" role="status"></p>
+    <div id="sleepPresets" class="sleep-presets"></div>
+    <div class="stepper">
+      <input type="number" id="sleepMin" min="1" max="600" step="1" inputmode="numeric" aria-label="Minutes">
+      <span>minutes</span>
+      <button type="button" id="sleepStart" class="primary">Start</button>
+    </div>
+    <div class="dialog-buttons">
+      <button type="button" id="sleepOff" class="left danger">Turn off</button>
+      <button type="button" id="sleepCancel">Close</button>
     </div>
   </form>
 </dialog>
