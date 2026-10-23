@@ -16,17 +16,17 @@ iPhone/iPad with Share → Add to Home Screen, to watch full screen and offline)
    the Dropbox library further down. If its transcript is in your GitHub repository or was opened
    on this device before, it plays right away. Otherwise the app offers to get one (below), or pick its `.json`. On
    iPhone/iPad pick files with *Choose File* (the Files app).
-2. Play. Tap any word, current or gray, to jump to it.
+2. It plays as soon as it opens, however it was opened: a lecture in the library, a folder's
+   shuffle, the recent list, *Play by tag* or the files picked. Tap any word, current or gray, to
+   jump to it.
 
 A recording shows its cover art where the video would be (from the file's ID3 tag, FLAC picture or
 MP4 `covr`; Ogg and Opus pictures aren't read), or, without one, bars that move with the sound. On
 iPhone and iPad the bars follow the transcript's words instead (the app doesn't route their audio
 through Web Audio, where the silent switch or the background could mute it). The lock screen and
 media controls show the lecture's name, its Dropbox folder and a recording's cover art and whether it
-plays, with play/pause and, beside it, back 10 seconds on the left (an iPhone draws that button as 15:
-Safari gives web pages' skip buttons that interval) and the next lecture on the right (in the folder,
-or in the list from *Play by tag*). There is no position slider: scrubbing it didn't work, so the app
-gives the lock screen no end to draw one to.
+plays, with play/pause only: no skip buttons, and no position slider (the app gives the lock screen
+no end to draw one to).
 
 **Playing with the screen locked.** A phone stops a video, sound and all, when the screen locks or the
 app goes to the background (iPhone does so with anything that has a picture), but lets audio play on.
@@ -34,28 +34,14 @@ So on a phone the lecture's stream is loaded in an audio player too, and when th
 the lecture plays, its sound goes on from there, from the same moment at the same speed; back in the
 app the video takes over from where the sound is. The sound stops for a moment at the switch: the
 phone has stopped the video before the app hears of it, and the audio player then fetches the sound
-from that moment. ⋯ Settings → *Lock screen* → *No pause when the screen locks* (off at first, kept on
-the device) avoids that: while you watch, the audio player plays along with the video, silently, kept
-in step by playing a little faster or slower, so at the switch it only has to be heard. Coming back,
-the video starts again silently where the sound is and takes it over once it plays there. The lecture
-is then streamed twice while you watch: twice the data. While the audio player plays, the video is
-muted as well as paused, so that the lock screen follows the audio player (it would show the paused
-video's ▶ otherwise).
-
-A lecture that ends meanwhile is followed as the end mode says, with no gap. A hidden app may start
-a sound only while another of its sounds plays (or just after), and once nothing sounds the phone may
-stop the app, downloads and all: until 2.13.0 the next lecture showed on the lock screen as playing,
-in silence, and started from its beginning once the phone was unlocked. So 30 seconds before the end
-the lecture that comes next is loaded in a second audio player, silent and paused where it starts, and
-just before the end it starts while the first one still sounds; the two players take turns. The lock
-screen's next button starts its lecture at once (a button press may start a sound); the links of the
-lectures that may come next are fetched ahead. A lecture started there that hasn't played on
-within 10 seconds is paused, so that the lock screen shows ▶ (its play button may start it) rather than
-a lecture playing in silence. Unlocked while the next lecture is still opening, its sound goes on, and
-the video takes over from there once it is open. The sleep timer works there too. A recording plays on
-by itself, and is followed the same way. After the app opens, it takes one tap on play or on a lecture
-(a phone lets sound start only from a tap). Some iOS versions have had bugs with web audio in the
-background (17.0 to 17.4, 26.0 and 26.1).
+from that moment. While the audio player plays, the video is muted as well as paused, so that the lock
+screen follows the audio player (it would show the paused video's ▶ otherwise). That is all: a lecture
+that ends with the screen locked just ends (the end mode acts in the app), and a recording plays on
+by itself. (2.13.0 to 2.15.0 could also stream the lecture a second time while you watched, and
+started the next lecture on the lock screen; that worked only some of the time, so 3.0.0 does
+neither.) After the app opens, it takes one tap on play or on a lecture (a phone lets sound start
+only from a tap). Some iOS versions have had bugs with web audio in the background (17.0 to 17.4,
+26.0 and 26.1).
 
 The three most recent lectures are listed under the pickers with where you stopped. One streamed from Dropbox
 streams again; for a file on the device a browser can't reopen it by itself, so tapping one opens
@@ -82,8 +68,8 @@ button added in a later release appears where the default bar has it.
 | `Fix` | tap a word to correct it (synced through GitHub when connected) |
 | notes (page icon) | notes on the lecture, below |
 | star | whether the lecture is important: filled while it is (as every lecture is at first), an outline while it isn't; a tap switches it, on every device (`unimportant.json`). *Play by tag* leaves out the lectures that aren't important. For lectures in the Dropbox library |
-| `⋯` | settings: links to the transcript, timing offset, sync fine-tune (±300 ms), layout, highlight, control bar, lock screen (no pause when the screen locks), GitHub, language, the list of fixes, export |
-| end mode | what happens when a lecture ends; each tap goes to the next of five, and the icon shows which (no message): stay (→\|); the next lecture once (list icon), then stay; the next lecture every time (the list icon in the highlight color); a random lecture once (crossed arrows), then stay; a random lecture every time (crossed arrows in the highlight color). See below |
+| `⋯` | settings: links to the transcript, timing offset, sync fine-tune (±300 ms), layout, highlight, control bar, GitHub, language, the list of fixes, export |
+| end mode | what happens when a lecture ends in the app; each tap goes to the next of three, and the icon shows which (no message): stop after this lecture (→\|); the next lecture, up to the last one (list icon, in the highlight color); a random lecture, until each has played once (crossed arrows, in the highlight color). Leaving the player sets it back to stop. See below |
 | sleep (moon) | sleep timer: playback pauses after the minutes chosen (a preset, or type them); lit while it runs (no message), and the dialog says how long is left |
 | `⛶` | full screen, where the browser allows it (not iPhone) |
 | handle between video and subtitles | drag to resize them; portrait and landscape are kept separately (double-click, or ⋯ Settings → Automatic, to reset) |
@@ -96,18 +82,17 @@ without one, or a file not in Dropbox, at the speed chosen last anywhere).
 
 **When a lecture ends.** A lecture from Dropbox plays among its folder's (in the library's order;
 hidden files are passed over), or among the list *Play by tag* made. The end mode button in the bar
-says what happens when it ends; each tap goes to the next of five, and a message says what it does:
-- stay (an arrow to a bar): the lecture stays at its end;
-- the next lecture, once (a list with a play sign): when this lecture ends the next one plays, and the
-  button goes back to stay;
-- the next lecture, every time (the same, in the highlight color chosen in ⋯ Settings): lecture
-  after lecture, until the folder or the list ends;
-- a random lecture, once (crossed arrows), then stay;
-- a random lecture, every time (crossed arrows in the highlight color): one with a transcript when
-  there are any, none twice until all of them have played.
+says what happens when it ends in the app; each tap goes to the next of three:
+- stop (an arrow to a bar): playback stops at the end of the lecture;
+- in order (a list with a play sign, in the highlight color chosen in ⋯ Settings): lecture after
+  lecture, up to the last one of the folder or the list;
+- shuffle (crossed arrows, in the highlight color): a random one (those with a transcript first),
+  until each has played once.
 
-The next lecture starts right away. The mode is kept on the device; *Play by tag* sets it to every
-time. ⏮ and ⏭ go through the same folder or list in order, whatever the mode.
+The next lecture starts right away. Leaving the player (‹) sets the button back to stop, so each
+lecture opened starts with it there; *Play by tag* sets it to in order or shuffle for its list. With
+the screen locked a lecture just ends. ⏮ and ⏭ go through the same folder or list in order, whatever
+the mode.
 
 **Notes.** The notes button (or `N`) opens a layer over the video and subtitles, which show through
 it; the bar still works. Type a note in the box and press Enter (Shift+Enter starts a new line): it
@@ -158,8 +143,8 @@ lecture is at first; a tap marks it not important (dimmed, on every device: `uni
 the star in the bar and ⋯ Settings → *This lecture* do the same for the lecture open. **Play by tag**, above the search,
 lists the lectures of the folders with any of the tags chosen, by folder (as in the library) and by
 name, leaving out the ones not important and the hidden ones; *New* or *Played* narrows it. **Play
-in order** plays them one after another, **Shuffle** in random order, and a lecture in the list
-starts the order there. The choice is kept on the device. A tap streams the file (a temporary link, renewed before
+in order** plays them one after another, **Shuffle** in random order until each has played once, and
+a lecture in the list starts the order there. The choice is kept on the device. A tap streams the file (a temporary link, renewed before
 its 4 hours are up, or at once if it stops on an expired link, keeping the position). Files put in
 Dropbox from any device are transcribed by the job, `.github/workflows/transcribe.yml` in the
 repository: on its schedule, or right away with *Check now*.

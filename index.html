@@ -7,7 +7,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Karaoke">
-<meta name="app-version" content="2.15.0">
+<meta name="app-version" content="3.0.0">
 <meta name="description" content="Plays your lecture videos and audio recordings, from your device or your Dropbox, with live karaoke subtitles from their Soniox transcripts; new ones get transcribed on GitHub.">
 <title>Lecture Karaoke</title>
 <link rel="manifest" href="manifest.webmanifest">
@@ -148,6 +148,8 @@
     <button type="button" id="endBack"></button><button type="button" id="upNextPlay"></button><button type="button" id="endKeepNext"></button>
     <button type="button" id="endRandom"></button><button type="button" id="endKeepRandom"></button><button type="button" id="upNextStay"></button>
     <input type="checkbox" id="upNextAuto">
+    <!-- 2.13.0 to 2.15.0's "No pause when the screen locks" (a second stream). -->
+    <span id="seamlessSet"><input type="checkbox" id="seamless"></span>
   </div>
   <!-- Touch lock (app.js setLocked): covers the player so nothing takes a touch; the lock has to be slid to the right. -->
   <div id="lock" class="lock" hidden>
@@ -225,14 +227,6 @@
       <legend>Control bar</legend>
       <button type="button" id="arrangeBtn">Arrange the buttons</button>
       <p class="small">Move buttons between the two rows, reorder them or hide them. Kept on this device.</p>
-    </fieldset>
-    <fieldset>
-      <legend>Lock screen</legend>
-      <p class="small top">Beside play/pause, the lock screen has back 10 seconds (an iPhone draws that button as 15) and the next lecture. It has no seek bar.</p>
-      <div id="seamlessSet">
-        <label class="check"><input type="checkbox" id="seamless"> No pause when the screen locks</label>
-        <p class="small">The sound plays a second time, silently, along with the video, so it goes on at once when the screen locks or you switch apps, and when you come back. Uses twice the data while you watch. Kept on this device.</p>
-      </div>
     </fieldset>
     <fieldset>
       <legend>Language</legend>

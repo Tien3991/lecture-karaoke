@@ -197,7 +197,7 @@ body.dragging .welcome { outline: 3px dashed var(--hi); outline-offset: -10px; }
 .bar .speed-group .step { min-width: 30px; padding: 6px 5px; font-size: 18px; line-height: 1; }
 .bar .speed-group .chip { min-width: 52px; padding: 7px 5px; font-variant-numeric: tabular-nums; }   /* fits 0.95×: − and + stay put */
 .bar .icon svg { display: block; width: 18px; height: 18px; margin: 0 auto; }
-.bar .icon.always { color: var(--chosen, var(--hi)); }   /* the end mode, every time: the highlight color chosen */
+.bar .icon.always { color: var(--chosen, var(--hi)); }   /* the end mode, when it goes on to another lecture: the highlight color chosen */
 /* the star: filled while the lecture is important (as at first), an outline, dimmed, while it isn't; not a lit button */
 .bar .icon.star[aria-pressed] { background: var(--ui); color: var(--fg); border-color: var(--line); }
 .bar .icon.star[aria-pressed="true"] path { fill: currentColor; }

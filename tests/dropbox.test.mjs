@@ -15,7 +15,7 @@ import { GitHub } from "../core/github.js";
 import { allTags, changedEntry, cleanTags, entryStatus, folderLanguage, folderTags, groupByFolder, hiddenHashes, indexEntry, keyFor,
   mergeLibrary, nextInFolder, pinnedFolders, playedHashes, randomPick, searchLibrary, shownFolder, unimportantHashes, withEntry,
   withHidden, withPinned, withPlayed, withTags, withUnimportant } from "../core/library.js";
-import { END_MODES, neighbor, nextEndMode, randomOther, spentEndMode, tagList } from "../core/playlist.js";
+import { END_MODES, neighbor, nextEndMode, randomOther, tagList } from "../core/playlist.js";
 
 /** Dropbox's content hash computed with node:crypto, to check the browser code against. */
 function reference(buf) {
@@ -344,24 +344,24 @@ test("the next lecture: the one after it in its folder, by name with numbers in 
   assert.equal(nextInFolder(lib, { path: "/elsewhere.mp4", folder: "" }), null, "not in the library");
 });
 
-test("a random lecture from a list: never the one that ended, transcribed first, none twice while others are left", () => {
+test("a random lecture from a list: never the one that ended, transcribed first, none twice, none once all have played", () => {
   const item = (name, status = "ready") => ({ name, path: `/C/${name}`, folder: "C", status, hash: name });
   const list = [item("a"), item("b"), item("c"), item("d", "pending")];
   const pick = (now, played, r = 0) => randomOther(list, list.find((i) => i.name === now), new Set(played), () => r)?.name ?? null;
   assert.equal(pick("a", []), "b", "not itself");
   assert.equal(pick("a", [], 0.99), "c", "transcribed ones first (not d)");
   assert.equal(pick("a", ["/C/b"]), "c", "not played yet");
-  assert.equal(pick("a", ["/C/b", "/C/c"]), "b", "all played: any again");
+  assert.equal(pick("a", ["/C/b", "/C/c"]), "d", "the transcribed ones played: then the others");
+  assert.equal(pick("a", ["/C/b", "/C/c", "/C/d"]), null, "all played: it stops");
   assert.equal(pick(null, [], 0.5), "b", "the first of a list: any of them");
   assert.equal(randomOther([list[0]], list[0]), null, "no other");
   assert.equal(randomOther([item("d", "pending"), item("e", null)], item("d", "pending"), new Set(), () => 0).name, "e",
     "any, when none has a transcript");
 });
 
-test("the end mode button: stay, the next once, the next every time, a random one once, every time, and round again", () => {
-  assert.deepEqual(END_MODES.map(nextEndMode), ["next1", "next", "shuffle1", "shuffle", "stay"]);
+test("the end mode button: stop, the next one, a random one, and round again", () => {
+  assert.deepEqual(END_MODES.map(nextEndMode), ["next", "shuffle", "stay"]);
   assert.equal(nextEndMode("anything else"), "stay");
-  assert.deepEqual(END_MODES.map(spentEndMode), ["stay", "stay", "next", "stay", "shuffle"], "the once-only ones are spent");
   const list = ["a", "b", "c"].map((name) => ({ name, path: `/F/${name}` }));
   assert.equal(neighbor(list, list[1], 1), list[2]);
   assert.equal(neighbor(list, list[1], -1), list[0]);
