@@ -22,7 +22,7 @@ import { applyNoteChanges, newNoteId, noteStamp, shownNotes } from "./core/notes
 import * as store from "./core/store.js";
 import { zipFiles } from "./core/zip.js";
 
-const VERSION = "2.11.1";
+const VERSION = "2.12.0";
 // Proportions of the burned vertical video (identical in every pipeline calibration), in em of
 // the main subtitle text: line limit, frame width, and the height the three blocks need.
 const FIT_EM = 892.4 / 67.797, FRAME_EM = 1080 / 67.797, PANEL_EM = 14.4, CTX_SCALE = 74 / 93;
@@ -72,8 +72,9 @@ const S = {
 // Kept on this device for every lecture: speed (and each Dropbox folder's own, folderRates, by the
 // folder in lower case), the timing offset and whether it is on, the video/subtitle split for each
 // orientation, the highlight (its color, the soft setting and whether it is on), what happens when a
-// lecture ends (endMode), the last Play by tag choice (tagPick) and sleep timer (sleepMin). (Position,
-// sync, language and fixes are kept per transcript in IndexedDB.)
+// lecture ends (endMode), the last Play by tag choice (tagPick) and sleep timer (sleepMin), and the
+// lock screen's buttons (lockButtons). (Position, sync, language and fixes are kept per transcript in
+// IndexedDB.)
 // The key carries the app prefix: all Pages projects share one origin.
 const PREFS_KEY = "lecture-karaoke.prefs";
 // Highlight presets, readable on black; yellow is the burned videos' color.
@@ -82,7 +83,8 @@ const HI_COLORS = [["Yellow", "#ffe000"], ["Orange", "#fb923c"], ["Green", "#4ad
 // The soft highlight keeps this % of the color, the rest the white of the words to come.
 const HI_SOFT_RANGE = [20, 90], HI_SOFT_DEFAULT = 40;
 const prefs = { rate: 1, folderRates: {}, offsetMs: 3000, offsetOn: false, split: { portrait: null, landscape: null }, bar: null,
-  uploadFolder: "Uploads", hi: { color: HI_COLORS[0][1], soft: false, strength: HI_SOFT_DEFAULT }, endMode: "stay" };
+  uploadFolder: "Uploads", hi: { color: HI_COLORS[0][1], soft: false, strength: HI_SOFT_DEFAULT }, endMode: "stay",
+  lockButtons: "skip" };
 try {
   const saved = JSON.parse(localStorage.getItem(PREFS_KEY) || "{}");
   Object.assign(prefs, saved, { split: { ...prefs.split, ...saved.split } });
@@ -94,6 +96,7 @@ prefs.folderRates = Object.fromEntries(Object.entries(Object(prefs.folderRates))
   .filter(([, r]) => Number.isFinite(r) && r >= RATE_MIN && r <= RATE_MAX));
 delete prefs.autoNext;   // 2.9.0's "play the next one by itself"
 if (!END_MODES.includes(prefs.endMode)) prefs.endMode = "stay";
+if (prefs.lockButtons !== "tracks") prefs.lockButtons = "skip";
 prefs.offsetMs = Number.isFinite(Number(prefs.offsetMs)) ? clamp(Number(prefs.offsetMs), -OFFSET_MAX_MS, OFFSET_MAX_MS) : 3000;
 prefs.offsetOn = prefs.offsetOn === true;
 for (const o of ["portrait", "landscape"]) if (!Number.isFinite(prefs.split[o])) prefs.split[o] = null;
@@ -384,6 +387,7 @@ function drawLibrary() {
     return group;
   }));
   drawPick();
+  drawThisLecture();   // the bar's star, once the list knows the lecture
 }
 $("libSearch").addEventListener("input", drawLibrary);
 const SHUFFLE_SVG = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7h3.2c2 0 3.1 1 4.1 2.6l2.6 4.8c1 1.6 2.1 2.6 4.1 2.6H20M3 17h3.2c1.3 0 2.2-.4 3-1.2M14.2 8.2c.8-.8 1.7-1.2 3-1.2H20M17.5 4.5 20 7l-2.5 2.5M17.5 14.5 20 17l-2.5 2.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
@@ -402,8 +406,9 @@ function importanceButton(it, important) {
   return b;
 }
 /** Marks lectures important (or not), on every device: unimportant.json. Play by tag leaves out the
- *  ones not important; they stay in their folder. The toast's Undo reverses it. */
-async function setImportant(items, important) {
+ *  ones not important; they stay in their folder. The toast's Undo reverses it (quiet: no toast, as
+ *  for the bar's star, which shows the change itself). */
+async function setImportant(items, important, quiet = false) {
   const n = items.length, what = n === 1 ? `“${items[0].name.replace(/\.[^.]+$/, "")}”` : `${n} lectures`;
   const done = library.unimportant.write(items.map((it) => it.hash), !important, (cur) => withUnimportant(cur, items, !important),
     `Mark ${n === 1 ? items[0].name : `${n} files`} ${important ? "important" : "not important"}`);
@@ -411,7 +416,7 @@ async function setImportant(items, important) {
   drawThisLecture();
   try {
     await done;
-    toast(important ? `${what} is important again.` : `${what}: not important, left out of Play by tag.`, "Undo", () => setImportant(items, !important));
+    if (!quiet) toast(important ? `${what} is important again.` : `${what}: not important, left out of Play by tag.`, "Undo", () => setImportant(items, !important));
   } catch (err) {
     toast(`Couldn't change ${what}: ${err.message}`);
   }
@@ -1977,11 +1982,11 @@ panel.addEventListener("click", (e) => {
 // Two rows of parts (data-el in index.html), arranged by the viewer and kept on this device:
 // Settings → Arrange the buttons, then tap a part and move it. Settings itself can't be hidden,
 // so the bar can always be arranged again.
-const BAR_DEFAULT = { rows: [["progress", "highlight", "timing", "notes", "fix", "lock", "endmode", "sleep", "fullscreen", "settings"],
+const BAR_DEFAULT = { rows: [["progress", "highlight", "timing", "notes", "fix", "lock", "important", "endmode", "sleep", "fullscreen", "settings"],
   ["back", "previous", "rewind", "play", "forward", "next", "speed"]], hidden: [] };
 const BAR_LABELS = { progress: "Progress bar", highlight: "Soft highlight", lock: "Lock", back: "Back", rewind: "−5s", play: "Play",
   forward: "+5s", speed: "Speed", timing: "Timing", fix: "Fix", settings: "Settings", fullscreen: "Full screen", notes: "Notes",
-  previous: "Previous lecture", next: "Next lecture", endmode: "End mode", sleep: "Sleep timer" };
+  previous: "Previous lecture", next: "Next lecture", endmode: "End mode", sleep: "Sleep timer", important: "Important" };
 // Kept here, not looked up: a part taken out of the bar is detached for a moment and couldn't be found.
 const PARTS = new Map([...bar.querySelectorAll("[data-el]")].map((el) => [el.dataset.el, el]));
 const barPart = (id) => PARTS.get(id);
@@ -2592,9 +2597,11 @@ function drawSteps() {
   const now = ensureScope() && openItem(), list = scopeList(), can = (dir) => !!(now && neighbor(list, now, dir));
   $("prevBtn").disabled = !can(-1);
   $("nextBtn").disabled = !can(1);
-  setAction("previoustrack", can(-1) ? () => stepLecture(-1) : null);
-  setAction("nexttrack", can(1) ? () => stepLecture(1) : null);
+  const tracks = prefs.lockButtons === "tracks";   // else the lock screen has skip buttons (drawLockButtons)
+  setAction("previoustrack", tracks && can(-1) ? () => stepLecture(-1) : null);
+  setAction("nexttrack", tracks && can(1) ? () => stepLecture(1) : null);
   drawEndMode();   // it names the folder or the list
+  drawThisLecture();
 }
 $("prevBtn").addEventListener("click", () => stepLecture(-1));
 $("nextBtn").addEventListener("click", () => stepLecture(1));
@@ -2629,11 +2636,10 @@ const END_LOOKS = {
   shuffle: { svg: () => SHUFFLE_SVG, says: () => `When a lecture ends, a random one ${scopeName()} plays, every time.`, always: true },
 };
 const endSays = () => { const s = END_LOOKS[prefs.endMode].says; return typeof s === "function" ? s() : s; };
-function setEndMode(mode, tell = false) {
+function setEndMode(mode) {
   prefs.endMode = mode;
   savePrefs();
   drawEndMode();
-  if (tell) toast(endSays());
 }
 function drawEndMode() {
   const b = $("endBtn"), look = END_LOOKS[prefs.endMode];
@@ -2642,14 +2648,14 @@ function drawEndMode() {
   b.setAttribute("aria-label", `End mode: ${endSays()}`);
   b.title = endSays();
 }
-$("endBtn").addEventListener("click", () => { setEndMode(nextEndMode(prefs.endMode), true); fetchAhead(); });
+$("endBtn").addEventListener("click", () => { setEndMode(nextEndMode(prefs.endMode)); fetchAhead(); });   // its icon says the mode
 const STAY_SVG = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 12h11M10.5 7l5 5-5 5M20 5v14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
 const LIST_SVG = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 6h12M3.5 11h8M3.5 16h6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M14.5 13v8l6.5-4z" fill="currentColor"/></svg>`;
 
 // ---------------------------------------------------------------- sleep timer
 // The moon button: playback pauses after the minutes chosen. While it runs the button is lit and the
-// dialog says how long is left. A timer checks, and so does the lecture as it plays (timers may wait
-// while the app is in the background).
+// dialog says how long is left (no toasts: the button shows it). A timer checks, and so does the
+// lecture as it plays (timers may wait while the app is in the background).
 const SLEEP_PRESETS = [5, 10, 15, 20, 30, 45, 60, 90];
 let sleep = null;   // {at, timer}
 function setSleep(min) {
@@ -2661,7 +2667,6 @@ function checkSleep() {
   if (!sleep || Date.now() < sleep.at) return;
   setSleep(0);
   pausePlayback();
-  toast("Sleep timer: paused.");
 }
 function drawSleep() {
   const left = sleep ? clock(Math.max(0, sleep.at - Date.now()) / 1000) : "";
@@ -2674,7 +2679,6 @@ setInterval(() => { if (sleep) { checkSleep(); if (sleep && $("sleepDialog").ope
 function startSleep(min) {
   $("sleepDialog").close();
   setSleep(min);
-  toast(`Sleep timer: pauses in ${min} minute${min === 1 ? "" : "s"}.`);
 }
 $("sleepPresets").append(...SLEEP_PRESETS.map((m) => {
   const b = el("button", { type: "button", className: "chip", textContent: `${m} min` });
@@ -2694,7 +2698,7 @@ $("sleepStart").addEventListener("click", () => {
   startSleep(m);
 });
 $("sleepMin").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); $("sleepStart").click(); } });
-$("sleepOff").addEventListener("click", () => { setSleep(0); $("sleepDialog").close(); toast("Sleep timer off."); });
+$("sleepOff").addEventListener("click", () => { setSleep(0); $("sleepDialog").close(); });
 $("sleepCancel").addEventListener("click", () => $("sleepDialog").close());
 
 // ---------------------------------------------------------------- the lock screen, and playing on in the background
@@ -2707,7 +2711,9 @@ $("sleepCancel").addEventListener("click", () => $("sleepDialog").close());
 // the same way: so the links of the lectures that may come next (the end mode's, and the previous and
 // next ones for the lock screen's buttons) are fetched ahead, and bg starts the one that comes at once.
 // A recording plays on by itself. The lock screen shows the lecture and whether it plays, with
-// play/pause, the position, and the previous and next lectures.
+// play/pause, the position, and skip buttons or the previous and next lectures (one pair: the phone
+// shows no more). While bg sounds the video is muted too: WebKit gives the lock screen to the largest
+// element that may sound, so a paused video kept it and showed ▶ while bg played (muted ones don't count).
 const BG = isMobile;   // a computer plays on in the background by itself
 const bg = Object.assign(document.createElement("audio"), { preload: "metadata" });
 let bgOn = false, bgUrl = "", bgLecture = null;   // bgOn: the sound comes from bg; bgUrl: its stream, of bgLecture (S.picked; null while just started)
@@ -2752,6 +2758,13 @@ function resume() {
 function pausePlayback() {
   S.playing = false;
   media().pause();
+}
+/** Mutes the video while bg sounds (see above), and gives it its sound back. */
+let videoQuiet = false;
+function quietVideo(on) {
+  if (on === videoQuiet || (on && video.muted)) return;
+  videoQuiet = on;
+  video.muted = on;
 }
 /** The sound from bg at once, at the video's speed: from `at` s, else from where bg is (the same
  *  lecture), or the video, or where a lecture just opened starts (S.startAt). The video pauses, also
@@ -2801,6 +2814,7 @@ function startHidden(it) {
 }
 /** Back in the app: the video takes over from where bg is (once it has loaded a lecture bg started). */
 function toForeground() {
+  quietVideo(false);
   if (!bgOn) return;
   const at = bg.currentTime, playing = !bg.paused && !bg.ended;
   bgOn = false;
@@ -2857,6 +2871,7 @@ for (const el of [video, bg]) {
   for (const ev of ["playing", "pause", "ratechange", "seeked", "loadedmetadata", "ended"]) el.addEventListener(ev, mine(drawNowPlaying));
 }
 bg.addEventListener("playing", () => queuePlayed([playingFile()]));
+bg.addEventListener("playing", () => { if (bgOn) quietVideo(true); });   // the lock screen goes with bg
 bg.addEventListener("error", () => {   // an expired link
   if (!bgOn || !stream || Date.now() - stream.lastError < 20000) return;
   stream.lastError = Date.now();
@@ -2879,16 +2894,42 @@ setAction("seekto", (d) => {
   if (d.fastSeek && m.fastSeek) m.fastSeek(d.seekTime);
   else m.currentTime = d.seekTime;
 });
-setAction("seekbackward", null);   // so the lock screen shows the previous and next lectures, not ±10 s
-setAction("seekforward", null);
+/** The lock screen's buttons beside play/pause: skip back and forward (iPhone draws them as 15 s and
+ *  passes that as seekOffset), or the previous and next lectures (drawSteps). The phone shows one
+ *  pair, so ⋯ Settings → Lock screen chooses (prefs.lockButtons). */
+function drawLockButtons() {
+  const skips = prefs.lockButtons === "skip";
+  setAction("seekbackward", skips ? (d) => skipBy(-(d.seekOffset || 10)) : null);
+  setAction("seekforward", skips ? (d) => skipBy(d.seekOffset || 10) : null);
+}
+drawLockButtons();
+/** Skips s seconds where the lecture plays: the video (with its hint), or bg while the app is hidden. */
+function skipBy(s) {
+  if (!bgOn) return skip(s);
+  bg.currentTime = clamp(bg.currentTime + s, 0, bg.duration || 0);
+}
+const lockChoices = [...document.querySelectorAll('input[name="lockButtons"]')];
+for (const r of lockChoices) r.addEventListener("change", () => {
+  prefs.lockButtons = r.value === "tracks" ? "tracks" : "skip";
+  savePrefs();
+  drawLockButtons();
+  drawSteps();
+});
 
-// ⋯ Settings → This lecture: a library lecture's star, as in the list.
+// ⋯ Settings → This lecture, and the bar's star: a library lecture's star, as in the list.
+$("starBtn").innerHTML = STAR_SVG;
 function drawThisLecture() {
-  const it = !player.hidden && openItem();
+  const it = !player.hidden && openItem(), important = !it || !library.unimportant.has(it.hash);
   $("thisSet").hidden = !it;
-  if (it) $("thisImportant").checked = !library.unimportant.has(it.hash);
+  if (it) $("thisImportant").checked = important;
+  const b = $("starBtn");
+  b.disabled = !it;
+  b.setAttribute("aria-pressed", String(important));
+  b.title = !it ? "Important: for lectures in the Dropbox library"
+    : important ? "Important (tap: not important, left out of Play by tag)" : "Not important: left out of Play by tag (tap: important)";
 }
 $("thisImportant").addEventListener("change", () => { const it = openItem(); if (it) setImportant([it], $("thisImportant").checked); });
+$("starBtn").addEventListener("click", () => { const it = openItem(); if (it) setImportant([it], library.unimportant.has(it.hash), true); });
 
 // ---------------------------------------------------------------- settings
 function openSettings() {
@@ -2903,6 +2944,7 @@ function openSettings() {
   drawFixList();
   drawTranscriptLinks();
   drawThisLecture();
+  for (const r of lockChoices) r.checked = r.value === prefs.lockButtons;
   $("settings").showModal();
   renderGet();
 }
@@ -2933,6 +2975,7 @@ function goHome() {
   if (!lockLayer.hidden) setLocked(false);
   pausePlayback();
   bgOn = false;
+  quietVideo(false);
   save();
   player.hidden = true;
   drawNowPlaying();

@@ -7,7 +7,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Karaoke">
-<meta name="app-version" content="2.11.1">
+<meta name="app-version" content="2.12.0">
 <meta name="description" content="Plays your lecture videos and audio recordings, from your device or your Dropbox, with live karaoke subtitles from their Soniox transcripts; new ones get transcribed on GitHub.">
 <title>Lecture Karaoke</title>
 <link rel="manifest" href="manifest.webmanifest">
@@ -116,6 +116,8 @@
       <button id="editBtn" class="chip" data-el="fix" aria-pressed="false">Fix</button>
       <button id="moreBtn" class="icon" data-el="settings" aria-label="Settings">⋯</button>
       <button id="lockBtn" class="icon" data-el="lock" aria-label="Lock the screen against touches"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 11V8a4 4 0 0 1 8 0v3" fill="none" stroke="currentColor" stroke-width="2.2"/><rect x="5" y="11" width="14" height="10" rx="2.5" fill="currentColor"/></svg></button>
+      <!-- The lecture's star (app.js, drawThisLecture): filled while important, a tap switches it. -->
+      <button id="starBtn" class="icon star" data-el="important" aria-pressed="true" aria-label="Important" disabled></button>
       <button id="fsBtn" class="icon" data-el="fullscreen" aria-label="Full screen">⛶</button>
       <button id="prevBtn" class="icon" data-el="previous" aria-label="Previous lecture" title="Previous lecture" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 5v14" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/><path d="M19 5.5v13L8.5 12z" fill="currentColor"/></svg></button>
       <button id="nextBtn" class="icon" data-el="next" aria-label="Next lecture" title="Next lecture" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 5v14" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/><path d="M5 5.5v13L15.5 12z" fill="currentColor"/></svg></button>
@@ -162,7 +164,7 @@
     <fieldset id="thisSet" hidden>
       <legend>This lecture</legend>
       <label class="check"><input type="checkbox" id="thisImportant"> Important</label>
-      <p class="small">Play by tag leaves out the lectures that aren't important. Kept on GitHub, for all your devices; the star beside each lecture in the list does the same.</p>
+      <p class="small">Play by tag leaves out the lectures that aren't important. Kept on GitHub, for all your devices; the star in the bar and beside each lecture in the list do the same.</p>
     </fieldset>
     <fieldset id="txSet">
       <legend>Transcript</legend>
@@ -212,6 +214,13 @@
       <legend>Control bar</legend>
       <button type="button" id="arrangeBtn">Arrange the buttons</button>
       <p class="small">Move buttons between the two rows, reorder them or hide them. Kept on this device.</p>
+    </fieldset>
+    <fieldset>
+      <legend>Lock screen</legend>
+      <p class="small top">The buttons beside play/pause on the lock screen. A phone shows one pair:</p>
+      <label class="check"><input type="radio" name="lockButtons" value="skip"> Skip back and forward</label>
+      <label class="check"><input type="radio" name="lockButtons" value="tracks"> Previous and next lecture</label>
+      <p class="small">An iPhone skips 15 seconds (it draws the buttons that way). Kept on this device.</p>
     </fieldset>
     <fieldset>
       <legend>Language</legend>
