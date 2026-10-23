@@ -7,7 +7,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Karaoke">
-<meta name="app-version" content="2.14.0">
+<meta name="app-version" content="2.15.0">
 <meta name="description" content="Plays your lecture videos and audio recordings, from your device or your Dropbox, with live karaoke subtitles from their Soniox transcripts; new ones get transcribed on GitHub.">
 <title>Lecture Karaoke</title>
 <link rel="manifest" href="manifest.webmanifest">
@@ -228,15 +228,11 @@
     </fieldset>
     <fieldset>
       <legend>Lock screen</legend>
-      <p class="small top">The buttons beside play/pause on the lock screen. A phone shows one pair:</p>
-      <label class="check"><input type="radio" name="lockButtons" value="skip"> Skip back and forward</label>
-      <label class="check"><input type="radio" name="lockButtons" value="tracks"> Previous and next lecture</label>
-      <p class="small">An iPhone skips 15 seconds (it draws the buttons that way).</p>
+      <p class="small top">Beside play/pause, the lock screen has back 10 seconds (an iPhone draws that button as 15) and the next lecture. It has no seek bar.</p>
       <div id="seamlessSet">
         <label class="check"><input type="checkbox" id="seamless"> No pause when the screen locks</label>
-        <p class="small">The sound plays a second time, silently, along with the video, so it goes on at once when the screen locks or you switch apps, and when you come back. Uses twice the data while you watch.</p>
+        <p class="small">The sound plays a second time, silently, along with the video, so it goes on at once when the screen locks or you switch apps, and when you come back. Uses twice the data while you watch. Kept on this device.</p>
       </div>
-      <p class="small">Kept on this device.</p>
     </fieldset>
     <fieldset>
       <legend>Language</legend>

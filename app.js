@@ -22,7 +22,7 @@ import { applyNoteChanges, newNoteId, noteStamp, shownNotes } from "./core/notes
 import * as store from "./core/store.js";
 import { zipFiles } from "./core/zip.js";
 
-const VERSION = "2.14.0";
+const VERSION = "2.15.0";
 // Proportions of the burned vertical video (identical in every pipeline calibration), in em of
 // the main subtitle text: line limit, frame width, and the height the three blocks need.
 const FIT_EM = 892.4 / 67.797, FRAME_EM = 1080 / 67.797, PANEL_EM = 14.4, CTX_SCALE = 74 / 93;
@@ -72,10 +72,9 @@ const S = {
 // Kept on this device for every lecture: speed (and each Dropbox folder's own, folderRates, by the
 // folder in lower case), the timing offset and whether it is on, the video/subtitle split for each
 // orientation, the highlight (its color, the soft setting and whether it is on), what happens when a
-// lecture ends (endMode), the last Play by tag choice (tagPick) and sleep timer (sleepMin), the lock
-// screen's buttons (lockButtons), seamless playing on when the app is hidden (seamless) and how dark
-// the touch lock makes the screen (lockDim). (Position, sync, language and fixes are kept per
-// transcript in IndexedDB.)
+// lecture ends (endMode), the last Play by tag choice (tagPick) and sleep timer (sleepMin), seamless
+// playing on when the app is hidden (seamless) and how dark the touch lock makes the screen (lockDim).
+// (Position, sync, language and fixes are kept per transcript in IndexedDB.)
 // The key carries the app prefix: all Pages projects share one origin.
 const PREFS_KEY = "lecture-karaoke.prefs";
 // Highlight presets, readable on black; yellow is the burned videos' color.
@@ -85,7 +84,7 @@ const HI_COLORS = [["Yellow", "#ffe000"], ["Orange", "#fb923c"], ["Green", "#4ad
 const HI_SOFT_RANGE = [20, 90], HI_SOFT_DEFAULT = 40;
 const prefs = { rate: 1, folderRates: {}, offsetMs: 3000, offsetOn: false, split: { portrait: null, landscape: null }, bar: null,
   uploadFolder: "Uploads", hi: { color: HI_COLORS[0][1], soft: false, strength: HI_SOFT_DEFAULT }, endMode: "stay",
-  lockButtons: "skip", seamless: false, lockDim: 0 };
+  seamless: false, lockDim: 0 };
 try {
   const saved = JSON.parse(localStorage.getItem(PREFS_KEY) || "{}");
   Object.assign(prefs, saved, { split: { ...prefs.split, ...saved.split } });
@@ -97,7 +96,7 @@ prefs.folderRates = Object.fromEntries(Object.entries(Object(prefs.folderRates))
   .filter(([, r]) => Number.isFinite(r) && r >= RATE_MIN && r <= RATE_MAX));
 delete prefs.autoNext;   // 2.9.0's "play the next one by itself"
 if (!END_MODES.includes(prefs.endMode)) prefs.endMode = "stay";
-if (prefs.lockButtons !== "tracks") prefs.lockButtons = "skip";
+delete prefs.lockButtons;   // 2.12.0 to 2.14.0's choice of lock screen buttons
 prefs.seamless = prefs.seamless === true;
 prefs.lockDim = clamp(Number(prefs.lockDim) || 0, 0, 1);
 prefs.offsetMs = Number.isFinite(Number(prefs.offsetMs)) ? clamp(Number(prefs.offsetMs), -OFFSET_MAX_MS, OFFSET_MAX_MS) : 3000;
@@ -2632,7 +2631,7 @@ function ensureScope() {
   if (now) scope = { folder: now.folder, played: new Set() };
   return scope;
 }
-/** The bar's previous (-1) and next (1) buttons, and the lock screen's. */
+/** The bar's previous (-1) and next (1) buttons, and the lock screen's next. */
 function stepLecture(dir) {
   allowBg();
   const now = ensureScope() && openItem(), it = now && neighbor(scopeList(), now, dir);
@@ -2647,9 +2646,7 @@ function drawSteps() {
   const now = ensureScope() && openItem(), list = scopeList(), can = (dir) => !!(now && neighbor(list, now, dir));
   $("prevBtn").disabled = !can(-1);
   $("nextBtn").disabled = !can(1);
-  const tracks = prefs.lockButtons === "tracks";   // else the lock screen has skip buttons (drawLockButtons)
-  setAction("previoustrack", tracks && can(-1) ? () => stepLecture(-1) : null);
-  setAction("nexttrack", tracks && can(1) ? () => stepLecture(1) : null);
+  setAction("nexttrack", can(1) ? () => stepLecture(1) : null);   // the lock screen's (see drawNowPlaying)
   drawEndMode();   // it names the folder or the list
   drawThisLecture();
 }
@@ -2773,12 +2770,11 @@ $("sleepCancel").addEventListener("click", () => $("sleepDialog").close());
 // readied ahead: 30 s before the end the lecture that comes next is loaded in the second audio element
 // (bgPair), muted and paused at its start (readyNext), and just before the end it sounds while this one
 // still does, which stops once it plays (switchToReady); the two take turns. The links of the lectures
-// that may come next (the end mode's, and the previous and next ones for the lock screen's buttons) are
-// fetched ahead. A lecture bg starts that doesn't play within 10 s is paused (watchStart), so that the
-// lock screen shows ▶ rather than playing in silence. A recording plays on by itself (from the video),
-// and is followed the same way. The lock screen
-// shows the lecture and whether it plays, with play/pause, the position, and skip buttons or the
-// previous and next lectures (one pair: the phone shows no more). While bg sounds the video is muted
+// that may come next (the end mode's, and the next one for the lock screen's button) are fetched
+// ahead. A lecture bg starts that doesn't play within 10 s is paused (watchStart), so that the lock
+// screen shows ▶ rather than playing in silence. A recording plays on by itself (from the video), and
+// is followed the same way. The lock screen shows the lecture and whether it plays, with play/pause,
+// back 10 s and the next lecture, and no seek bar (drawNowPlaying). While bg sounds the video is muted
 // too: WebKit gives the lock screen to the largest element that may sound, so a paused video kept it
 // and showed ▶ while bg played (muted ones don't count).
 // The sound stops for a moment at the switch, while bg fetches it from there: the phone has stopped the
@@ -3110,7 +3106,7 @@ function fetchAhead() {
   if (!now) return;
   const list = scopeList();
   if (prefs.endMode.startsWith("shuffle") && !scope.coming) scope.coming = pickRandom(now);
-  for (const it of new Set([neighbor(list, now, 1), neighbor(list, now, -1), scope.coming].filter(Boolean))) {
+  for (const it of new Set([neighbor(list, now, 1), scope.coming].filter(Boolean))) {
     linkFor(it.path).catch(() => {});
     startOf(it).then((at) => starts.set(it.path, at));
   }
@@ -3138,44 +3134,29 @@ for (const el of bgPair) {   // only the one that plays the lecture (the other m
     renewStream();
   });
 }
-/** The lock screen's state: playing or not (once it really plays), and the position. */
+/** The lock screen's state: playing or not (once it really plays), and the position, but with no end
+ *  (an infinite duration, which WebKit leaves out), so that the phone draws no seek bar. */
 function drawNowPlaying() {
   if (!mediaSession) return;
   const m = media();
   mediaSession.playbackState = player.hidden ? "none" : m.paused || m.ended ? "paused" : "playing";
-  if (!(m.duration > 0) || !isFinite(m.duration)) return;
   try {
-    mediaSession.setPositionState({ duration: m.duration, playbackRate: m.playbackRate || 1, position: Math.min(m.currentTime, m.duration) });
+    mediaSession.setPositionState({ duration: Infinity, playbackRate: m.playbackRate || 1, position: m.currentTime || 0 });
   } catch { /* not here */ }
 }
+// The lock screen's buttons: play/pause, back 10 s on its left and the next lecture on its right
+// (drawSteps). WebKit offers the phone the actions that have a handler; it shows one button on each
+// side, a skip one where there is one. It gives every page's skip buttons a 15 s interval, which
+// iPhone draws on the button: this one goes back 10 s all the same. No seek bar (no seekto action,
+// and no end in the position above): scrubbing it didn't work.
 setAction("play", resume);
 setAction("pause", pausePlayback);
-setAction("seekto", (d) => {
-  const m = media();
-  if (d.fastSeek && m.fastSeek) m.fastSeek(d.seekTime);
-  else m.currentTime = d.seekTime;
-});
-/** The lock screen's buttons beside play/pause: skip back and forward (iPhone draws them as 15 s and
- *  passes that as seekOffset), or the previous and next lectures (drawSteps). The phone shows one
- *  pair, so ⋯ Settings → Lock screen chooses (prefs.lockButtons). */
-function drawLockButtons() {
-  const skips = prefs.lockButtons === "skip";
-  setAction("seekbackward", skips ? (d) => skipBy(-(d.seekOffset || 10)) : null);
-  setAction("seekforward", skips ? (d) => skipBy(d.seekOffset || 10) : null);
-}
-drawLockButtons();
+setAction("seekbackward", () => skipBy(-10));
 /** Skips s seconds where the lecture plays: the video (with its hint), or bg while the app is hidden. */
 function skipBy(s) {
   if (!bgOn) return skip(s);
   bg.currentTime = clamp(bg.currentTime + s, 0, bg.duration || 0);
 }
-const lockChoices = [...document.querySelectorAll('input[name="lockButtons"]')];
-for (const r of lockChoices) r.addEventListener("change", () => {
-  prefs.lockButtons = r.value === "tracks" ? "tracks" : "skip";
-  savePrefs();
-  drawLockButtons();
-  drawSteps();
-});
 $("seamlessSet").hidden = !BG;   // a computer plays on by itself
 $("seamless").addEventListener("change", () => {
   prefs.seamless = $("seamless").checked;
@@ -3211,7 +3192,6 @@ function openSettings() {
   drawFixList();
   drawTranscriptLinks();
   drawThisLecture();
-  for (const r of lockChoices) r.checked = r.value === prefs.lockButtons;
   $("seamless").checked = prefs.seamless;
   $("settings").showModal();
   renderGet();

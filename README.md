@@ -22,10 +22,11 @@ A recording shows its cover art where the video would be (from the file's ID3 ta
 MP4 `covr`; Ogg and Opus pictures aren't read), or, without one, bars that move with the sound. On
 iPhone and iPad the bars follow the transcript's words instead (the app doesn't route their audio
 through Web Audio, where the silent switch or the background could mute it). The lock screen and
-media controls show the lecture's name, its Dropbox folder and a recording's cover art, whether it
-plays and where it is, with play/pause, the position slider and, beside play/pause, either skip back
-and forward (15 seconds on an iPhone, which draws them that way) or the previous and next lectures:
-a phone shows one pair, so ⋯ Settings → *Lock screen* chooses (skip, at first; kept on the device).
+media controls show the lecture's name, its Dropbox folder and a recording's cover art and whether it
+plays, with play/pause and, beside it, back 10 seconds on the left (an iPhone draws that button as 15:
+Safari gives web pages' skip buttons that interval) and the next lecture on the right (in the folder,
+or in the list from *Play by tag*). There is no position slider: scrubbing it didn't work, so the app
+gives the lock screen no end to draw one to.
 
 **Playing with the screen locked.** A phone stops a video, sound and all, when the screen locks or the
 app goes to the background (iPhone does so with anything that has a picture), but lets audio play on.
@@ -47,8 +48,8 @@ stop the app, downloads and all: until 2.13.0 the next lecture showed on the loc
 in silence, and started from its beginning once the phone was unlocked. So 30 seconds before the end
 the lecture that comes next is loaded in a second audio player, silent and paused where it starts, and
 just before the end it starts while the first one still sounds; the two players take turns. The lock
-screen's previous and next buttons start theirs at once (a button press may start a sound); the links
-of the lectures that may come next are fetched ahead. A lecture started there that hasn't played on
+screen's next button starts its lecture at once (a button press may start a sound); the links of the
+lectures that may come next are fetched ahead. A lecture started there that hasn't played on
 within 10 seconds is paused, so that the lock screen shows ▶ (its play button may start it) rather than
 a lecture playing in silence. Unlocked while the next lecture is still opening, its sound goes on, and
 the video takes over from there once it is open. The sleep timer works there too. A recording plays on
@@ -81,7 +82,7 @@ button added in a later release appears where the default bar has it.
 | `Fix` | tap a word to correct it (synced through GitHub when connected) |
 | notes (page icon) | notes on the lecture, below |
 | star | whether the lecture is important: filled while it is (as every lecture is at first), an outline while it isn't; a tap switches it, on every device (`unimportant.json`). *Play by tag* leaves out the lectures that aren't important. For lectures in the Dropbox library |
-| `⋯` | settings: links to the transcript, timing offset, sync fine-tune (±300 ms), layout, highlight, control bar, lock screen buttons, GitHub, language, the list of fixes, export |
+| `⋯` | settings: links to the transcript, timing offset, sync fine-tune (±300 ms), layout, highlight, control bar, lock screen (no pause when the screen locks), GitHub, language, the list of fixes, export |
 | end mode | what happens when a lecture ends; each tap goes to the next of five, and the icon shows which (no message): stay (→\|); the next lecture once (list icon), then stay; the next lecture every time (the list icon in the highlight color); a random lecture once (crossed arrows), then stay; a random lecture every time (crossed arrows in the highlight color). See below |
 | sleep (moon) | sleep timer: playback pauses after the minutes chosen (a preset, or type them); lit while it runs (no message), and the dialog says how long is left |
 | `⛶` | full screen, where the browser allows it (not iPhone) |
