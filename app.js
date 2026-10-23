@@ -22,7 +22,7 @@ import { applyNoteChanges, newNoteId, noteStamp, shownNotes } from "./core/notes
 import * as store from "./core/store.js";
 import { zipFiles } from "./core/zip.js";
 
-const VERSION = "2.13.0";
+const VERSION = "2.14.0";
 // Proportions of the burned vertical video (identical in every pipeline calibration), in em of
 // the main subtitle text: line limit, frame width, and the height the three blocks need.
 const FIT_EM = 892.4 / 67.797, FRAME_EM = 1080 / 67.797, PANEL_EM = 14.4, CTX_SCALE = 74 / 93;
@@ -73,8 +73,9 @@ const S = {
 // folder in lower case), the timing offset and whether it is on, the video/subtitle split for each
 // orientation, the highlight (its color, the soft setting and whether it is on), what happens when a
 // lecture ends (endMode), the last Play by tag choice (tagPick) and sleep timer (sleepMin), the lock
-// screen's buttons (lockButtons) and seamless playing on when the app is hidden (seamless). (Position,
-// sync, language and fixes are kept per transcript in IndexedDB.)
+// screen's buttons (lockButtons), seamless playing on when the app is hidden (seamless) and how dark
+// the touch lock makes the screen (lockDim). (Position, sync, language and fixes are kept per
+// transcript in IndexedDB.)
 // The key carries the app prefix: all Pages projects share one origin.
 const PREFS_KEY = "lecture-karaoke.prefs";
 // Highlight presets, readable on black; yellow is the burned videos' color.
@@ -84,7 +85,7 @@ const HI_COLORS = [["Yellow", "#ffe000"], ["Orange", "#fb923c"], ["Green", "#4ad
 const HI_SOFT_RANGE = [20, 90], HI_SOFT_DEFAULT = 40;
 const prefs = { rate: 1, folderRates: {}, offsetMs: 3000, offsetOn: false, split: { portrait: null, landscape: null }, bar: null,
   uploadFolder: "Uploads", hi: { color: HI_COLORS[0][1], soft: false, strength: HI_SOFT_DEFAULT }, endMode: "stay",
-  lockButtons: "skip", seamless: false };
+  lockButtons: "skip", seamless: false, lockDim: 0 };
 try {
   const saved = JSON.parse(localStorage.getItem(PREFS_KEY) || "{}");
   Object.assign(prefs, saved, { split: { ...prefs.split, ...saved.split } });
@@ -98,6 +99,7 @@ delete prefs.autoNext;   // 2.9.0's "play the next one by itself"
 if (!END_MODES.includes(prefs.endMode)) prefs.endMode = "stay";
 if (prefs.lockButtons !== "tracks") prefs.lockButtons = "skip";
 prefs.seamless = prefs.seamless === true;
+prefs.lockDim = clamp(Number(prefs.lockDim) || 0, 0, 1);
 prefs.offsetMs = Number.isFinite(Number(prefs.offsetMs)) ? clamp(Number(prefs.offsetMs), -OFFSET_MAX_MS, OFFSET_MAX_MS) : 3000;
 prefs.offsetOn = prefs.offsetOn === true;
 for (const o of ["portrait", "landscape"]) if (!Number.isFinite(prefs.split[o])) prefs.split[o] = null;
@@ -378,7 +380,7 @@ function drawLibrary() {
     };
     const pin = tool(g.pinned ? `Unpin “${name}”` : `Pin “${name}” to the top`, PIN_SVG, () => setPinned(g.folder, !g.pinned, name));
     pin.setAttribute("aria-pressed", String(g.pinned));
-    tools.append(tool(`Play a random lecture from “${name}”`, SHUFFLE_SVG, () => { const it = randomPick(g.items); if (it) openFromDropbox(it); }));
+    tools.append(tool(`Play a random lecture from “${name}”`, SHUFFLE_SVG, () => { const it = randomPick(g.items); if (it) playItem(it); }));
     if (g.items.some((i) => i.status === "ready")) {
       tools.append(tool(`Download the transcripts of “${name}”`, DOWNLOAD_SVG, () => downloadFolder(g.folder, g.items)));
     }
@@ -849,7 +851,7 @@ async function dropboxMediaInfo(it) {
  *  plays among `within` (a scope: a list by tag, or the folder it is stepped through), else among its
  *  folder's lectures. */
 async function openFromDropbox(it, within) {
-  allowPlay(bg);      // a tap in the list: the lecture may go on in the background later,
+  allowBg();          // a tap in the list: the lecture may go on in the background later,
   allowPlay(video);   // and one from Play by tag starts by itself
   if (!dbx || library.opening) return;
   library.opening = true;
@@ -1154,6 +1156,7 @@ function showVideo(picked, resumeAt = 0) {
   $("welcome").hidden = true;
   player.hidden = false;
   document.title = `${name.replace(/\.[^.]+$/, "")} · Lecture Karaoke`;
+  $("barTitle").textContent = $("barTitle").title = name;
   updateChips();
   layout();
   resize();
@@ -1983,17 +1986,18 @@ panel.addEventListener("click", (e) => {
 // Two rows of parts (data-el in index.html), arranged by the viewer and kept on this device:
 // Settings → Arrange the buttons, then tap a part and move it. Settings itself can't be hidden,
 // so the bar can always be arranged again.
-const BAR_DEFAULT = { rows: [["progress", "highlight", "timing", "notes", "fix", "lock", "important", "endmode", "sleep", "fullscreen", "settings"],
-  ["back", "previous", "rewind", "play", "forward", "next", "speed"]], hidden: [] };
+const BAR_DEFAULT = { rows: [["title", "progress", "highlight", "timing", "notes", "fix", "lock", "important", "endmode", "sleep", "fullscreen",
+  "settings"], ["back", "previous", "rewind", "play", "forward", "next", "speed"]], hidden: [] };
 const BAR_LABELS = { progress: "Progress bar", highlight: "Soft highlight", lock: "Lock", back: "Back", rewind: "−5s", play: "Play",
   forward: "+5s", speed: "Speed", timing: "Timing", fix: "Fix", settings: "Settings", fullscreen: "Full screen", notes: "Notes",
-  previous: "Previous lecture", next: "Next lecture", endmode: "End mode", sleep: "Sleep timer", important: "Important" };
+  previous: "Previous lecture", next: "Next lecture", endmode: "End mode", sleep: "Sleep timer", important: "Important", title: "File name" };
 // Kept here, not looked up: a part taken out of the bar is detached for a moment and couldn't be found.
 const PARTS = new Map([...bar.querySelectorAll("[data-el]")].map((el) => [el.dataset.el, el]));
 const barPart = (id) => PARTS.get(id);
 const canShow = (id) => id !== "fullscreen" || canFullscreen;   // no element full screen on iPhone
 /** The saved arrangement, made valid: every part exactly once. A part added in a later release goes
- *  where the default bar has it, after the part it follows there (else at the end of that row). */
+ *  where the default bar has it: first in its row, or after the part it follows there (else at the
+ *  end of that row). */
 function barConfig() {
   const c = prefs.bar?.rows ? prefs.bar : BAR_DEFAULT, seen = new Set();
   const take = (ids, ok = () => true) => (Array.isArray(ids) ? ids : [])
@@ -2003,7 +2007,7 @@ function barConfig() {
   BAR_DEFAULT.rows.forEach((def, r) => def.forEach((id, i) => {
     if (seen.has(id)) return;
     const after = i ? rows[r].indexOf(def[i - 1]) : -1;
-    rows[r].splice(after < 0 ? rows[r].length : after + 1, 0, id);
+    rows[r].splice(!i ? 0 : after < 0 ? rows[r].length : after + 1, 0, id);
     seen.add(id);
   }));
   return { rows, hidden };
@@ -2093,22 +2097,26 @@ $("forwardBtn").addEventListener("click", () => skip(5));
 // The lock button covers the player: no touch or click reaches anything under it (the keyboard
 // still works). A touch shows the slider; the lock has to be slid all the way to the right and
 // let go there. A stray touch, or a slide that wanders off the track, leaves it locked.
+// Above it, the dimmer: a black layer over the player, which a swipe along it makes lighter (to the
+// right) or darker (to the left, all the way: a black screen); kept on this device (prefs.lockDim).
 const lockLayer = $("lock"), unlock = $("unlock"), knob = $("unlockKnob");
-let unlockTimer = 0, slide = null, knobAt = 0;
+const dimmer = $("dimmer"), dimKnob = $("dimKnob");
+let unlockTimer = 0, slide = null, knobAt = 0, dimSlide = null;
 function setLocked(on) {
   lockLayer.hidden = !on;
   player.classList.toggle("locked", on);
   for (const part of player.children) if (part !== lockLayer) part.inert = on;   // nothing under it takes focus either
-  slide = null;
+  slide = dimSlide = null;
   moveKnob(0);
+  drawDim();
   if (on) showUnlock();
-  else unlock.classList.remove("show");
+  else for (const el of [unlock, dimmer]) el.classList.remove("show");
 }
-/** Shows the slider for a few seconds (every touch on the lock shows it again). */
+/** Shows the sliders for a few seconds (every touch on the lock shows them again). */
 function showUnlock() {
-  unlock.classList.add("show");
+  for (const el of [unlock, dimmer]) el.classList.add("show");
   clearTimeout(unlockTimer);
-  unlockTimer = setTimeout(() => { if (!slide) unlock.classList.remove("show"); }, 3500);
+  unlockTimer = setTimeout(() => { if (!slide && !dimSlide) for (const el of [unlock, dimmer]) el.classList.remove("show"); }, 3500);
 }
 const knobRoom = () => unlock.clientWidth - knob.offsetWidth - 10;   // the knob sits 5 px inside each end
 function moveKnob(x, glide = false) {
@@ -2160,6 +2168,46 @@ knob.addEventListener("keydown", (e) => {
   const room = knobRoom(), x = clamp(knobAt + (step * room) / 4, 0, room);
   if (x >= room) setLocked(false);
   else { moveKnob(x, true); showUnlock(); }
+});
+/** The dimmer as set: the layer's darkness, and its knob (at the right end while nothing is dimmed). */
+function drawDim() {
+  const dark = prefs.lockDim;
+  $("dimLayer").style.opacity = String(dark);
+  dimmer.style.setProperty("--clear", String(1 - dark));
+  dimKnob.setAttribute("aria-valuenow", String(Math.round((1 - dark) * 100)));
+  dimKnob.setAttribute("aria-valuetext", dark ? `${Math.round(dark * 100)}% dark` : "Not dimmed");
+}
+const dimRoom = () => dimmer.clientWidth - dimKnob.offsetWidth - 8;   // the knob sits 4 px inside each end
+// A swipe anywhere along the dimmer moves its knob as far as the finger goes; a tap changes nothing.
+dimmer.addEventListener("pointerdown", (e) => {
+  if (dimSlide) return;
+  e.preventDefault();
+  dimmer.setPointerCapture(e.pointerId);
+  dimSlide = { id: e.pointerId, x: e.clientX, clear: 1 - prefs.lockDim };
+  showUnlock();
+});
+dimmer.addEventListener("pointermove", (e) => {
+  if (e.pointerId !== dimSlide?.id) return;
+  const clear = clamp(dimSlide.clear + (e.clientX - dimSlide.x) / (dimRoom() || 1), 0, 1);
+  prefs.lockDim = Math.round((1 - clear) * 100) / 100;
+  drawDim();
+});
+for (const type of ["pointerup", "pointercancel"]) dimmer.addEventListener(type, (e) => {
+  if (e.pointerId !== dimSlide?.id) return;
+  dimSlide = null;
+  savePrefs();
+  showUnlock();
+});
+// With the keyboard, the arrow keys make it a tenth lighter (→) or darker (←).
+dimKnob.addEventListener("keydown", (e) => {
+  const step = { ArrowRight: 1, ArrowUp: 1, PageUp: 3, End: 10, ArrowLeft: -1, ArrowDown: -1, PageDown: -3, Home: -10 }[e.key];
+  if (!step || dimSlide) return;
+  e.preventDefault();
+  e.stopPropagation();   // not the player's shortcuts
+  prefs.lockDim = clamp(Math.round(prefs.lockDim * 10 - step) / 10, 0, 1);
+  drawDim();
+  savePrefs();
+  showUnlock();
 });
 
 // ---------------------------------------------------------------- seeking, with a brief hint on the video
@@ -2586,12 +2634,13 @@ function ensureScope() {
 }
 /** The bar's previous (-1) and next (1) buttons, and the lock screen's. */
 function stepLecture(dir) {
-  allowPlay(bg);
+  allowBg();
   const now = ensureScope() && openItem(), it = now && neighbor(scopeList(), now, dir);
   if (!it) return;
   scope.coming = null;
   save();            // the lecture left keeps the very spot
-  startHidden(it);   // from the lock screen
+  disarm();          // a lecture readied to follow this one isn't wanted now
+  startHidden(it);   // from the lock screen (its button counts as a tap)
   playItem(it, scope);
 }
 function drawSteps() {
@@ -2616,15 +2665,26 @@ function pickRandom(now) {
   }
   return it;
 }
-/** When a lecture ends: what the end mode says (a random one as picked ahead, fetchAhead). */
+/** The lecture that follows `now` as the end mode says (a random one as picked ahead, fetchAhead,
+ *  kept in scope.coming), or null. */
+function comingAfter(now) {
+  const mode = prefs.endMode;
+  if (mode === "stay") return null;
+  if (mode.startsWith("next")) return neighbor(scopeList(), now, 1);
+  const c = scope.coming;
+  if (!(c && c.path !== now.path && scopeList().some((i) => i.path === c.path))) scope.coming = pickRandom(now);
+  return scope.coming;
+}
+/** When a lecture ends: what the end mode says. With the app hidden, the next one was readied to start
+ *  just before (readyNext); if it wasn't, it starts now. */
 function lectureEnded() {
   const mode = prefs.endMode, now = ensureScope() && openItem();
   if (mode === "stay" || !now) return;
-  const coming = scope.coming;
+  const it = comingAfter(now);
   scope.coming = null;
-  const it = mode.startsWith("next") ? neighbor(scopeList(), now, 1)
-    : coming && coming.path !== now.path && scopeList().some((i) => i.path === coming.path) ? coming : pickRandom(now);
   if (!it) return toast(mode.startsWith("next") ? `That was the last lecture ${scopeName()}.` : `There is no other lecture ${scopeName()}.`);
+  if (ready?.path === it.path && document.hidden && switchToReady()) return;
+  disarm();
   startHidden(it);   // the app hidden: at once, or the phone won't let it start
   setEndMode(spentEndMode(mode));
   playItem(it, scope);
@@ -2707,19 +2767,28 @@ $("sleepCancel").addEventListener("click", () => $("sleepDialog").close());
 // (iPhone does so with anything that has a picture), but lets audio play on. So on a phone the open
 // lecture is loaded in an audio element too (bg: its index, not the whole stream), and when the app is
 // hidden while it plays, the sound goes on from bg, from the same moment at the same speed; back in
-// the app the video takes over from where bg is. The phone allows that only straight away (within a
-// second or two of the sound stopping), and a lecture that ends while the app is hidden is followed
-// the same way: so the links of the lectures that may come next (the end mode's, and the previous and
-// next ones for the lock screen's buttons) are fetched ahead, and bg starts the one that comes at once.
-// A recording plays on by itself. The lock screen shows the lecture and whether it plays, with
-// play/pause, the position, and skip buttons or the previous and next lectures (one pair: the phone
-// shows no more). While bg sounds the video is muted too: WebKit gives the lock screen to the largest
-// element that may sound, so a paused video kept it and showed ▶ while bg played (muted ones don't count).
+// the app the video takes over from where bg is. A hidden app may start a sound only while another of
+// its sounds plays (or just after one stopped), and once nothing sounds the phone may stop the app
+// altogether, its downloads too. So a lecture that ends while the app is hidden is followed by one
+// readied ahead: 30 s before the end the lecture that comes next is loaded in the second audio element
+// (bgPair), muted and paused at its start (readyNext), and just before the end it sounds while this one
+// still does, which stops once it plays (switchToReady); the two take turns. The links of the lectures
+// that may come next (the end mode's, and the previous and next ones for the lock screen's buttons) are
+// fetched ahead. A lecture bg starts that doesn't play within 10 s is paused (watchStart), so that the
+// lock screen shows ▶ rather than playing in silence. A recording plays on by itself (from the video),
+// and is followed the same way. The lock screen
+// shows the lecture and whether it plays, with play/pause, the position, and skip buttons or the
+// previous and next lectures (one pair: the phone shows no more). While bg sounds the video is muted
+// too: WebKit gives the lock screen to the largest element that may sound, so a paused video kept it
+// and showed ▶ while bg played (muted ones don't count).
 // The sound stops for a moment at the switch, while bg fetches it from there: the phone has stopped the
 // video first. Seamless (below, a setting) avoids that by playing bg along with the video, muted.
 const BG = isMobile;   // a computer plays on in the background by itself
-const bg = Object.assign(document.createElement("audio"), { preload: "metadata" });
+const bgPair = [0, 1].map(() => Object.assign(document.createElement("audio"), { preload: "metadata" }));
+let bg = bgPair[0];   // the one that plays (or follows) the open lecture; the other readies the next
 let bgOn = false, bgUrl = "", bgLecture = null;   // bgOn: the sound comes from bg; bgUrl: its stream, of bgLecture (S.picked; null while just started)
+let ready = null;   // the lecture readied in the other element: {it, path, link, start, el}
+const otherBg = () => (bg === bgPair[0] ? bgPair[1] : bgPair[0]);
 /** The element the lecture plays from: the video, or bg while the app is hidden. */
 const media = () => (bgOn ? bg : video);
 const hasPicture = () => !(S.picked?.audio || (video.readyState && !video.videoWidth));
@@ -2737,13 +2806,15 @@ function allowPlay(el) {
   const tap = navigator.userActivation?.isActive;
   if (!isMobile || unlocked.has(el) || tap === false || !el.paused || (el === bg && bgOn)) return;
   if (tap) unlocked.add(el);   // a browser that can't tell tries again on the next tap
-  if (el === bg) try { if (navigator.audioSession) navigator.audioSession.type = "playback"; } catch { /* not here */ }
+  if (el !== video) try { if (navigator.audioSession) navigator.audioSession.type = "playback"; } catch { /* not here */ }
   const muted = el.muted;
   el.muted = true;
   el.play().catch(() => {});
   el.pause();
   el.muted = muted;
 }
+/** Both of bg's elements: either may play a lecture with the app hidden. */
+function allowBg() { for (const el of bgPair) allowPlay(el); }
 /** bg loads the lecture opened, ready to take over. */
 function loadBg() {
   if (!BG || bgOn || !S.videoUrl) return;
@@ -2752,22 +2823,27 @@ function loadBg() {
   bgUrl = S.videoUrl;
   bg.src = bgUrl;
 }
-/** Plays the open lecture: the video, or bg while the app is hidden. */
+/** Plays the open lecture: the video, or bg while the app is hidden. In the app, a lecture bg plays
+ *  (one it started, now open) goes on in the video from there; another one's sound stops. */
 function resume() {
-  allowPlay(bg);
+  allowBg();
   if (player.hidden || !S.videoUrl) return;
-  if (BG && document.hidden) playHidden();
-  else video.play().catch(() => {});
+  if (BG && document.hidden) return playHidden();
+  if (bgOn) {
+    if (!bgLecture && bgUrl === S.videoUrl) bgLecture = S.picked;
+    if (bgLecture === S.picked) return toForeground(true);
+    bgOn = false;
+    bg.pause();
+    quietVideo(false);
+  }
+  video.play().catch(() => {});
 }
 function pausePlayback() {
   S.playing = false;
   media().pause();
 }
 /** Mutes the video while bg sounds (see above), and gives it its sound back. */
-let videoQuiet = false;
 function quietVideo(on) {
-  if (on === videoQuiet || (on && video.muted)) return;
-  videoQuiet = on;
   video.muted = on;
 }
 /** The sound from bg at once, at the video's speed: from `at` s, else from where bg is (the same
@@ -2775,8 +2851,9 @@ function quietVideo(on) {
  *  so that the phone doesn't play it again when it is unlocked. */
 function playHidden(at) {
   const same = bgUrl === S.videoUrl && (bgLecture === S.picked || !bgLecture);
-  if (bgOn && same && !bg.paused && at == null) {   // started already (startHidden): now it is open
+  if (bgOn && same && !bg.paused && at == null) {   // started already (startHidden, switchToReady): now it is open
     bgLecture = S.picked;
+    S.playing = true;   // showVideo said not
     queuePlayed([playingFile()]);
     const now = ensureScope() && openItem();
     if (now) scope.played.add(now.path);
@@ -2818,6 +2895,7 @@ function startBg() {
     S.playing = false;
     drawNowPlaying();
   });
+  watchStart(bg);
 }
 /** While the app is hidden: starts `it` from bg at once, from its link fetched ahead (else false). */
 function startHidden(it) {
@@ -2830,11 +2908,100 @@ function startHidden(it) {
   startBg();
   return true;
 }
-/** Back in the app: the video takes over from where bg is (once it has loaded a lecture bg started). */
-function toForeground() {
+/** A lecture bg started with the app hidden that hasn't played on by 1 s within 10 s isn't playing (the
+ *  phone didn't let it): it is paused, so that the lock screen shows ▶, not a lecture playing in
+ *  silence. A seek (the lock screen's skip buttons), or the jump to where it starts, isn't playing. */
+function watchStart(el) {
+  let last = NaN, moved = 0;
+  const tick = () => { const t = el.currentTime; if (t > last) moved += Math.min(t - last, 1); last = t; };
+  const seek = () => { last = NaN; };
+  el.addEventListener("timeupdate", tick);
+  el.addEventListener("seeking", seek);
+  setTimeout(() => {
+    el.removeEventListener("timeupdate", tick);
+    el.removeEventListener("seeking", seek);
+    if (moved > 1 || el !== bg || !bgOn || !document.hidden || el.paused) return;
+    el.pause();
+    S.playing = false;
+    drawNowPlaying();
+  }, 10000);
+}
+
+// With the app hidden, 30 s before the lecture playing ends (from bg, or a recording from the video),
+// the one that comes next is readied in the other element; it sounds 0.6 s before the end (or at the
+// end, if it was late).
+let linkWanted = "";   // the path whose link is being fetched for readyNext
+/** The lecture that comes next (comingAfter) loaded in the other element, muted, played for a moment
+ *  (that loads it) and paused at its start. */
+function readyNext() {
+  const now = BG && document.hidden && !media().paused && (!bgOn || bgLecture === S.picked) && ensureScope() && openItem();
+  const it = now && comingAfter(now);
+  if (!it) return disarm();
+  if (ready?.path === it.path) return;
+  const link = linkAhead(it.path), start = starts.get(it.path) ?? 0;
+  if (!link) {   // an old link: a new one, then the next timeupdate readies it
+    if (linkWanted !== it.path) {
+      linkWanted = it.path;
+      linkFor(it.path).catch(() => {}).finally(() => { linkWanted = ""; });
+    }
+    return;
+  }
+  disarm();
+  const el = otherBg();
+  ready = { it, path: it.path, link, start, el };
+  el.muted = true;
+  el.src = `${link}#t=${start.toFixed(3)}`;
+  el.defaultPlaybackRate = el.playbackRate = folderRate(it.folder);
+  el.play().then(() => { if (ready?.el === el) { el.pause(); el.currentTime = start; } }, () => {});
+}
+/** The lecture readied sounds from its start while the one ending still sounds (a hidden app may start a
+ *  sound then), and that one stops once it plays; then it opens. False if there is none to switch to. */
+function switchToReady() {
+  const r = ready, old = media();
+  ready = null;
+  if (!r || r.el.error) return false;
+  const el = r.el;
+  bg = el;
+  bgUrl = r.link;
+  bgLecture = null;   // until it is open
+  bgOn = true;
+  S.playing = true;
+  el.currentTime = r.start;
+  el.muted = false;
+  el.play().catch(() => {
+    if (bg !== el || !el.paused) return;
+    S.playing = false;   // the one ending plays to its end
+    drawNowPlaying();
+  });
+  el.addEventListener("playing", () => { if (old !== bg) { old.pause(); old.muted = true; } }, { once: true });
+  watchStart(el);
+  scope.coming = null;
+  setEndMode(spentEndMode(prefs.endMode));
+  playItem(r.it, scope);
+  return true;
+}
+/** The lecture readied isn't wanted (any more). */
+function disarm() {
+  const r = ready;
+  ready = null;
+  if (r && r.el !== bg) { r.el.pause(); r.el.muted = true; }
+}
+for (const el of [video, ...bgPair]) el.addEventListener("timeupdate", () => {
+  if (!BG || el !== media() || !document.hidden || el.paused || !(el.duration > 0)) return;
+  const left = (el.duration - el.currentTime) / (el.playbackRate || 1);
+  if (left > 30) return;
+  if (left > 0.6) readyNext();
+  else if (ready) switchToReady();
+});
+
+/** Back in the app: the video takes over from where bg is, also when `play` (resume) though bg is
+ *  paused. A lecture bg started plays on from bg until it is open (then resume hands it over). */
+function toForeground(play = false) {
+  disarm();   // the video's end starts the next lecture now
   if (!bgOn) return quietVideo(false);
-  const at = bg.currentTime, playing = !bg.paused && !bg.ended;
-  if (playing && prefs.seamless && bgLecture === S.picked) return catchUp();
+  const at = bg.currentTime, playing = play || (!bg.paused && !bg.ended);
+  if (playing && !bgLecture) return;
+  if (playing && prefs.seamless && bgLecture === S.picked && !bg.paused) return catchUp();
   quietVideo(false);
   bgOn = false;
   bg.pause();
@@ -2955,20 +3122,22 @@ async function startOf(it) {
   return at > 5 && !(dur && at >= dur - 10) ? at : 0;
 }
 
-for (const el of [video, bg]) {
+for (const el of [video, ...bgPair]) {
   const mine = (fn) => () => { if (el === media()) fn(); };
   el.addEventListener("ended", mine(lectureEnded));
   el.addEventListener("playing", mine(() => { const now = ensureScope() && openItem(); if (now) scope.played.add(now.path); }));
   el.addEventListener("timeupdate", mine(() => { if (sleep) checkSleep(); }));
   for (const ev of ["playing", "pause", "ratechange", "seeked", "loadedmetadata", "ended"]) el.addEventListener(ev, mine(drawNowPlaying));
 }
-bg.addEventListener("playing", () => queuePlayed([playingFile()]));
-bg.addEventListener("playing", () => { if (bgOn) quietVideo(true); });   // the lock screen goes with bg
-bg.addEventListener("error", () => {   // an expired link
-  if (!bgOn || !stream || Date.now() - stream.lastError < 20000) return;
-  stream.lastError = Date.now();
-  renewStream();
-});
+for (const el of bgPair) {   // only the one that plays the lecture (the other may be readying the next)
+  el.addEventListener("playing", () => { if (el === bg) queuePlayed([playingFile()]); });
+  el.addEventListener("playing", () => { if (el === bg && bgOn) quietVideo(true); });   // the lock screen goes with bg
+  el.addEventListener("error", () => {   // an expired link
+    if (el !== bg || !bgOn || !stream || Date.now() - stream.lastError < 20000) return;
+    stream.lastError = Date.now();
+    renewStream();
+  });
+}
 /** The lock screen's state: playing or not (once it really plays), and the position. */
 function drawNowPlaying() {
   if (!mediaSession) return;
@@ -3075,6 +3244,7 @@ function goHome() {
   pausePlayback();
   video.pause();   // also while it caught up with bg, muted (seamless)
   bgOn = false;
+  disarm();
   stopFollowing();
   quietVideo(false);
   save();
@@ -3217,7 +3387,7 @@ for (const [id, kind] of [["txText", "text"], ["txJson", "json"]]) {
 // ---------------------------------------------------------------- remembering, wake lock, toast
 let toastTimer = 0;
 function save() {
-  // not while bg plays a lecture that isn't open yet (startHidden): its time isn't this one's
+  // not while bg plays a lecture that isn't open yet (startHidden, switchToReady): its time isn't this one's
   if (!S.id || (bgOn && bgLecture !== S.picked)) return;
   S.rec.position = media().currentTime || S.rec.position || 0;
   Object.assign(S.rec, { syncMs: S.syncMs, language: S.language });
@@ -3287,7 +3457,8 @@ if (dev) {
   window.__lk = { S, video, prefs, store, activeEvent, spokenCount, syncFixes, library, pickedVideo, openFromDropbox, renewStream,
     loadLibrary, pollTranscript, probeMedia, viz, get gh() { return gh; }, get dbx() { return dbx; }, get W() { return W; },
     get stream() { return stream; }, get transfer() { return transfer; }, get audioGraph() { return audioGraph; },
-    bg, get bgOn() { return bgOn; }, get scope() { return scope; } };   // for checks
+    bgPair, get bg() { return bg; }, get bgOn() { return bgOn; }, get bgLecture() { return bgLecture; }, get ready() { return ready; },
+    get scope() { return scope; } };   // for checks
   const q = new URLSearchParams(location.search);
   // ?pick=URL: as if that file had been picked on this device
   if (q.get("pick")) {

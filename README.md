@@ -38,26 +38,38 @@ the device) avoids that: while you watch, the audio player plays along with the 
 in step by playing a little faster or slower, so at the switch it only has to be heard. Coming back,
 the video starts again silently where the sound is and takes it over once it plays there. The lecture
 is then streamed twice while you watch: twice the data. While the audio player plays, the video is
-muted as well as paused, so that the lock screen
-follows the audio player (it would show the paused video's ▶ otherwise). A lecture that ends
-meanwhile is followed as the end mode says, and so are the lock screen's previous and next buttons:
-the phone allows a new start only right away, so the links of the lectures that may come next are
-fetched ahead. The sleep timer works there too. A recording plays on by itself. After the app opens, it takes one tap on play or on a
-lecture (a phone lets sound start only from a tap). Some iOS versions have had bugs with web audio in
-the background (17.0 to 17.4, 26.0 and 26.1).
+muted as well as paused, so that the lock screen follows the audio player (it would show the paused
+video's ▶ otherwise).
+
+A lecture that ends meanwhile is followed as the end mode says, with no gap. A hidden app may start
+a sound only while another of its sounds plays (or just after), and once nothing sounds the phone may
+stop the app, downloads and all: until 2.13.0 the next lecture showed on the lock screen as playing,
+in silence, and started from its beginning once the phone was unlocked. So 30 seconds before the end
+the lecture that comes next is loaded in a second audio player, silent and paused where it starts, and
+just before the end it starts while the first one still sounds; the two players take turns. The lock
+screen's previous and next buttons start theirs at once (a button press may start a sound); the links
+of the lectures that may come next are fetched ahead. A lecture started there that hasn't played on
+within 10 seconds is paused, so that the lock screen shows ▶ (its play button may start it) rather than
+a lecture playing in silence. Unlocked while the next lecture is still opening, its sound goes on, and
+the video takes over from there once it is open. The sleep timer works there too. A recording plays on
+by itself, and is followed the same way. After the app opens, it takes one tap on play or on a lecture
+(a phone lets sound start only from a tap). Some iOS versions have had bugs with web audio in the
+background (17.0 to 17.4, 26.0 and 26.1).
 
 The three most recent lectures are listed under the pickers with where you stopped. One streamed from Dropbox
 streams again; for a file on the device a browser can't reopen it by itself, so tapping one opens
 the file picker (its Recents has the video).
 
-The control bar has two rows: by default the progress bar (on a phone held upright, on a line of its
-own), **Soft**, **Exact**, notes, **Fix**, the lock, the star, the end mode, the sleep timer, full
-screen and ⋯ on top, and back, previous lecture, −5s, play, +5s, next lecture and the speed below. ⋯ Settings → *Arrange the buttons* lets you move any button left or right or to
+The control bar has two rows: by default the lecture's file name (on a line of its own), the progress
+bar (on a phone held upright, on a line of its own too), **Soft**, **Exact**, notes, **Fix**, the lock,
+the star, the end mode, the sleep timer, full screen and ⋯ on top, and back, previous lecture, −5s,
+play, +5s, next lecture and the speed below. ⋯ Settings → *Arrange the buttons* lets you move any button left or right or to
 the other row, or hide it (tap a button, then move it); the arrangement is kept on the device. A
 button added in a later release appears where the default bar has it.
 
 | Control | |
 |---|---|
+| file name | the open lecture's file name, cut short with … when too long; it can be moved or hidden like a button |
 | `‹` | back to the start screen |
 | `⏮` / `⏭` | the previous / next lecture: in the folder (the library's order), or in the list from *Play by tag*; whatever the end mode |
 | `−5s` / `+5s` | back / forward 5 seconds |
@@ -65,7 +77,7 @@ button added in a later release appears where the default bar has it.
 | `−` `1×` `+` | playback speed, 0.2× to 4×: − and + change it by 0.05× (they stay in place, so they can be tapped again); tap the number to type a value or pick a preset. Each Dropbox folder keeps its own speed |
 | `Exact` / `+3 s` | switch between exact timing and the offset set in ⋯ Settings (+ before the voice, to read ahead; − after it) |
 | `Soft` | switch the highlight between full color and the soft setting in ⋯ Settings (lit while soft) |
-| lock | lock the screen against touches while the lecture plays: nothing under it reacts, and the bar dims. A touch shows *Slide to unlock*: slide the lock all the way to the right and let go there (stopping short, or wandering off the track, leaves it locked). The keyboard still works; on the slider, → moves it a quarter at a time |
+| lock | lock the screen against touches while the lecture plays: nothing under it reacts, and the bar dims. A touch shows *Slide to unlock*: slide the lock all the way to the right and let go there (stopping short, or wandering off the track, leaves it locked). Above it, the dimmer lays black over the screen: a swipe along it to the left darkens it, all the way to black, and to the right lightens it again (the knob moves as far as the finger; a tap changes nothing; kept on the device for the next lock; it never unlocks). The keyboard still works; on the lock's slider, → moves it a quarter at a time, and on the dimmer ←/→ darken or lighten it a tenth |
 | `Fix` | tap a word to correct it (synced through GitHub when connected) |
 | notes (page icon) | notes on the lecture, below |
 | star | whether the lecture is important: filled while it is (as every lecture is at first), an outline while it isn't; a tap switches it, on every device (`unimportant.json`). *Play by tag* leaves out the lectures that aren't important. For lectures in the Dropbox library |
@@ -132,8 +144,8 @@ per course subfolder, with search and a badge each: *Ready*, *Transcribing*, *No
 *Failed*. A long name takes two lines. A file not played yet on any device is marked **New**
 (`played.json` in the repository; a file counts as played once it starts playing, and each device
 adds, the first time, the lectures it played before). Each folder's header has three
-buttons: the crossed arrows play a random lecture from the folder (one with a transcript, when it
-has any; while searching, one of those found); the arrow down saves the transcripts of the
+buttons: the crossed arrows play a random lecture from the folder, at once (one with a transcript,
+when it has any; while searching, one of those found); the arrow down saves the transcripts of the
 lectures listed in one ZIP (each as `.txt`, a sentence per line, and `.json`, with word timings,
 with the word fixes on GitHub and the device's, plus *All transcripts.txt* with all the text, a
 `#` heading per lecture; on a phone **Save ZIP** opens the share sheet); and the pin keeps the

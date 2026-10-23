@@ -7,7 +7,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Karaoke">
-<meta name="app-version" content="2.13.0">
+<meta name="app-version" content="2.14.0">
 <meta name="description" content="Plays your lecture videos and audio recordings, from your device or your Dropbox, with live karaoke subtitles from their Soniox transcripts; new ones get transcribed on GitHub.">
 <title>Lecture Karaoke</title>
 <link rel="manifest" href="manifest.webmanifest">
@@ -100,6 +100,8 @@
     <div class="bar-row" id="barRow1"></div>
     <div class="bar-row" id="barRow2"></div>
     <div id="barParts" hidden>
+      <!-- The open lecture's file name, on a line of its own (app.js showVideo). -->
+      <div id="barTitle" class="bar-title" data-el="title"></div>
       <div class="progress" data-el="progress">
         <span id="time" class="time">0:00</span>
         <input id="seek" type="range" min="0" max="1000" value="0" step="1" aria-label="Position">
@@ -149,6 +151,15 @@
   </div>
   <!-- Touch lock (app.js setLocked): covers the player so nothing takes a touch; the lock has to be slid to the right. -->
   <div id="lock" class="lock" hidden>
+    <!-- The dimmer (app.js drawDim): a black layer over the player, and above the lock's slider, its own:
+         a swipe to the right makes the screen lighter, to the left darker, all the way to black. -->
+    <div id="dimLayer" class="dim-layer"></div>
+    <div id="dimmer" class="dimmer">
+      <svg class="dim-end dark" viewBox="0 0 24 24" aria-hidden="true"><path d="M19.5 14.6A8 8 0 1 1 9.4 4.5a6.4 6.4 0 0 0 10.1 10.1z" fill="currentColor"/></svg>
+      <svg class="dim-end light" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.2" fill="currentColor"/><path d="M12 2.5v2.6M12 18.9v2.6M2.5 12h2.6M18.9 12h2.6M5.3 5.3l1.8 1.8M16.9 16.9l1.8 1.8M5.3 18.7l1.8-1.8M16.9 7.1l1.8-1.8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+      <span id="dimKnob" class="dim-knob" role="slider" tabindex="0" aria-label="Dimmer: slide to the left to darken the screen, to the right to lighten it"
+        aria-valuemin="0" aria-valuemax="100" aria-valuenow="100"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 4a8 8 0 0 1 0 16z" fill="currentColor"/></svg></span>
+    </div>
     <div id="unlock" class="unlock">
       <span class="unlock-text" aria-hidden="true">Slide to unlock</span>
       <svg class="unlock-end" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 11V8a4 4 0 0 1 7.75-1.4" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/><rect x="5" y="11" width="14" height="10" rx="2.5" fill="currentColor"/></svg>

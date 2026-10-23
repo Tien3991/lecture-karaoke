@@ -202,6 +202,8 @@ body.dragging .welcome { outline: 3px dashed var(--hi); outline-offset: -10px; }
 .bar .icon.star[aria-pressed] { background: var(--ui); color: var(--fg); border-color: var(--line); }
 .bar .icon.star[aria-pressed="true"] path { fill: currentColor; }
 .bar .icon.star[aria-pressed="false"] { color: var(--dim); }
+.bar-title { flex: 1 1 100%; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; text-align: center;
+  font-size: 13px; color: var(--dim); }
 .progress { flex: 1 1 160px; display: flex; align-items: center; gap: 8px; min-width: 0; }
 .progress input[type=range] { flex: 1; min-width: 60px; accent-color: var(--hi); }
 .time { font-variant-numeric: tabular-nums; font-size: 13px; color: var(--dim); white-space: nowrap; }
@@ -275,6 +277,8 @@ select, #editorText { width: 100%; padding: 10px; border-radius: 10px; border: 1
 .toast { position: fixed; left: 50%; bottom: calc(76px + env(safe-area-inset-bottom)); transform: translateX(-50%); max-width: calc(100vw - 32px);
   padding: 10px 14px; border-radius: 12px; background: #222; color: var(--fg); box-shadow: 0 6px 24px rgba(0,0,0,.5); z-index: 10; }
 .toast button { margin-left: 10px; padding: 4px 10px; }
+/* while the touch lock is on: above its two sliders, and no touch reaches it either */
+.player.locked ~ .toast { bottom: calc(148px + env(safe-area-inset-bottom)); pointer-events: none; }
 .update { position: fixed; top: calc(8px + env(safe-area-inset-top)); left: 50%; transform: translateX(-50%); padding: 8px 12px; border-radius: 12px;
   background: var(--hi); color: #000; z-index: 11; white-space: nowrap; }
 .update button { margin-left: 8px; padding: 4px 10px; background: #000; color: var(--hi); border: 0; }
@@ -369,3 +373,17 @@ select, #editorText { width: 100%; padding: 10px; border-radius: 10px; border: 1
 .unlock-knob svg { width: 24px; height: 24px; }
 .unlock-knob.back { transition: transform 0.25s ease-out; }
 .unlock-knob:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }
+/* the dimmer: a black layer over the player (under the sliders), and its slider above the lock's */
+.dim-layer { position: absolute; inset: 0; background: #000; opacity: 0; pointer-events: none; }
+.dimmer { position: absolute; left: 50%; bottom: calc(88px + env(safe-area-inset-bottom)); width: min(340px, calc(100% - 32px)); height: 48px;
+  transform: translateX(-50%); border-radius: 24px; background: linear-gradient(90deg, #000, #3d3d3d); border: 1px solid #444;
+  box-shadow: 0 6px 28px rgba(0, 0, 0, 0.7); touch-action: none; cursor: ew-resize;
+  opacity: 0; visibility: hidden; transition: opacity 0.4s, visibility 0.4s; }
+.dimmer.show { opacity: 1; visibility: visible; transition: opacity 0.15s; }
+.dim-end { position: absolute; top: 50%; width: 20px; height: 20px; margin-top: -10px; pointer-events: none; }
+.dim-end.dark { left: 14px; color: #8a8a8a; }
+.dim-end.light { right: 14px; color: #f2f2f2; }
+.dim-knob { position: absolute; top: 3px; left: calc(4px + (100% - 48px) * var(--clear, 1)); width: 40px; height: 40px; display: grid;
+  place-items: center; border-radius: 50%; background: #e8e8e8; color: #000; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.6); }
+.dim-knob svg { width: 22px; height: 22px; }
+.dim-knob:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }
