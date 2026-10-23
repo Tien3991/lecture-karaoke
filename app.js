@@ -22,7 +22,7 @@ import { applyNoteChanges, newNoteId, noteStamp, shownNotes } from "./core/notes
 import * as store from "./core/store.js";
 import { zipFiles } from "./core/zip.js";
 
-const VERSION = "2.12.0";
+const VERSION = "2.13.0";
 // Proportions of the burned vertical video (identical in every pipeline calibration), in em of
 // the main subtitle text: line limit, frame width, and the height the three blocks need.
 const FIT_EM = 892.4 / 67.797, FRAME_EM = 1080 / 67.797, PANEL_EM = 14.4, CTX_SCALE = 74 / 93;
@@ -72,9 +72,9 @@ const S = {
 // Kept on this device for every lecture: speed (and each Dropbox folder's own, folderRates, by the
 // folder in lower case), the timing offset and whether it is on, the video/subtitle split for each
 // orientation, the highlight (its color, the soft setting and whether it is on), what happens when a
-// lecture ends (endMode), the last Play by tag choice (tagPick) and sleep timer (sleepMin), and the
-// lock screen's buttons (lockButtons). (Position, sync, language and fixes are kept per transcript in
-// IndexedDB.)
+// lecture ends (endMode), the last Play by tag choice (tagPick) and sleep timer (sleepMin), the lock
+// screen's buttons (lockButtons) and seamless playing on when the app is hidden (seamless). (Position,
+// sync, language and fixes are kept per transcript in IndexedDB.)
 // The key carries the app prefix: all Pages projects share one origin.
 const PREFS_KEY = "lecture-karaoke.prefs";
 // Highlight presets, readable on black; yellow is the burned videos' color.
@@ -84,7 +84,7 @@ const HI_COLORS = [["Yellow", "#ffe000"], ["Orange", "#fb923c"], ["Green", "#4ad
 const HI_SOFT_RANGE = [20, 90], HI_SOFT_DEFAULT = 40;
 const prefs = { rate: 1, folderRates: {}, offsetMs: 3000, offsetOn: false, split: { portrait: null, landscape: null }, bar: null,
   uploadFolder: "Uploads", hi: { color: HI_COLORS[0][1], soft: false, strength: HI_SOFT_DEFAULT }, endMode: "stay",
-  lockButtons: "skip" };
+  lockButtons: "skip", seamless: false };
 try {
   const saved = JSON.parse(localStorage.getItem(PREFS_KEY) || "{}");
   Object.assign(prefs, saved, { split: { ...prefs.split, ...saved.split } });
@@ -97,6 +97,7 @@ prefs.folderRates = Object.fromEntries(Object.entries(Object(prefs.folderRates))
 delete prefs.autoNext;   // 2.9.0's "play the next one by itself"
 if (!END_MODES.includes(prefs.endMode)) prefs.endMode = "stay";
 if (prefs.lockButtons !== "tracks") prefs.lockButtons = "skip";
+prefs.seamless = prefs.seamless === true;
 prefs.offsetMs = Number.isFinite(Number(prefs.offsetMs)) ? clamp(Number(prefs.offsetMs), -OFFSET_MAX_MS, OFFSET_MAX_MS) : 3000;
 prefs.offsetOn = prefs.offsetOn === true;
 for (const o of ["portrait", "landscape"]) if (!Number.isFinite(prefs.split[o])) prefs.split[o] = null;
@@ -2714,6 +2715,8 @@ $("sleepCancel").addEventListener("click", () => $("sleepDialog").close());
 // play/pause, the position, and skip buttons or the previous and next lectures (one pair: the phone
 // shows no more). While bg sounds the video is muted too: WebKit gives the lock screen to the largest
 // element that may sound, so a paused video kept it and showed ▶ while bg played (muted ones don't count).
+// The sound stops for a moment at the switch, while bg fetches it from there: the phone has stopped the
+// video first. Seamless (below, a setting) avoids that by playing bg along with the video, muted.
 const BG = isMobile;   // a computer plays on in the background by itself
 const bg = Object.assign(document.createElement("audio"), { preload: "metadata" });
 let bgOn = false, bgUrl = "", bgLecture = null;   // bgOn: the sound comes from bg; bgUrl: its stream, of bgLecture (S.picked; null while just started)
@@ -2743,10 +2746,11 @@ function allowPlay(el) {
 }
 /** bg loads the lecture opened, ready to take over. */
 function loadBg() {
-  if (!BG || bgOn || !S.videoUrl || bgUrl === S.videoUrl) return;
+  if (!BG || bgOn || !S.videoUrl) return;
+  bgLecture = S.picked;   // also a lecture opened again, whose stream bg has already (its link is kept)
+  if (bgUrl === S.videoUrl) return;
   bgUrl = S.videoUrl;
   bg.src = bgUrl;
-  bgLecture = S.picked;
 }
 /** Plays the open lecture: the video, or bg while the app is hidden. */
 function resume() {
@@ -2778,6 +2782,19 @@ function playHidden(at) {
     if (now) scope.played.add(now.path);
     return;
   }
+  if (at == null && !bgOn && following()) {   // seamless: bg plays along, muted; it only has to sound
+    clearTimeout(followTimer);
+    bg.defaultPlaybackRate = bg.playbackRate = video.playbackRate;
+    bg.muted = false;
+    bgOn = true;
+    S.playing = true;
+    S.handing = true;
+    video.pause();
+    S.handing = false;
+    quietVideo(true);   // bg's playing event came long ago
+    drawNowPlaying();
+    return;
+  }
   at ??= same && bgOn ? bg.currentTime : video.readyState ? video.currentTime : S.startAt;
   if (bgUrl !== S.videoUrl || !bg.readyState) {
     bgUrl = S.videoUrl;
@@ -2794,6 +2811,7 @@ function startBg() {
   const url = bgUrl;
   bgOn = true;
   S.playing = true;
+  bg.muted = false;   // it may have followed the video, muted (seamless)
   bg.play().catch(() => {
     if (bgUrl !== url || !bgOn || !bg.paused) return;
     bgOn = false;   // not allowed now (the lock screen's play button is)
@@ -2814,9 +2832,10 @@ function startHidden(it) {
 }
 /** Back in the app: the video takes over from where bg is (once it has loaded a lecture bg started). */
 function toForeground() {
-  quietVideo(false);
-  if (!bgOn) return;
+  if (!bgOn) return quietVideo(false);
   const at = bg.currentTime, playing = !bg.paused && !bg.ended;
+  if (playing && prefs.seamless && bgLecture === S.picked) return catchUp();
+  quietVideo(false);
   bgOn = false;
   bg.pause();
   if (bgLecture !== S.picked) return;
@@ -2828,6 +2847,79 @@ function toForeground() {
   if (video.readyState && !S.swapping) go();
   else video.addEventListener("loadedmetadata", go, { once: true });
 }
+
+// Seamless (⋯ Settings → Lock screen, prefs.seamless; phones): while the video plays with the app in
+// view, bg plays the same stream along with it, muted (twice the data), kept within a fraction of a
+// second by playing a little faster or slower. When the phone stops the video, bg only has to be
+// unmuted (playHidden): no pause. Back in the app the video starts again, muted, where bg is, and takes
+// the sound back once it plays there (catchUp); then bg follows it again.
+let followTimer = 0;
+/** bg plays the open lecture along with the video, muted, close enough to take over. */
+const following = () => prefs.seamless && bgUrl === S.videoUrl && bgLecture === S.picked && !bg.paused && !bg.ended
+  && Math.abs(bg.currentTime - video.currentTime) < 1;
+/** Starts bg following the playing video, and keeps it in step (every second); stops it otherwise. */
+function followVideo() {
+  clearTimeout(followTimer);
+  if (!BG || !prefs.seamless || bgOn || player.hidden || !S.playing || video.ended || !hasPicture()) return stopFollowing();
+  followTimer = setTimeout(followVideo, 1000);
+  if (video.paused || S.swapping) return;   // the phone stopped it (playHidden takes bg as it is), or a new link loads
+  loadBg();
+  bg.muted = true;
+  const rate = video.playbackRate, d = video.currentTime - bg.currentTime;   // > 0: bg is behind
+  if (bg.paused || bg.ended || Math.abs(d) > 3) {
+    bg.defaultPlaybackRate = bg.playbackRate = rate;
+    bg.currentTime = video.currentTime + 0.5 * rate;   // it takes bg a moment to start there
+    bg.play().catch(() => {});
+  } else bg.playbackRate = Math.abs(d) < 0.08 ? rate : rate * (1 + clamp(d / 2, -0.2, 0.2));
+}
+function stopFollowing() {
+  clearTimeout(followTimer);
+  if (!bgOn && !bg.paused) bg.pause();
+}
+for (const ev of ["playing", "seeked", "ratechange"]) video.addEventListener(ev, followVideo);
+video.addEventListener("pause", () => { if (!S.playing) stopFollowing(); });   // the viewer's pause (the phone's is handed over)
+/** Seamless, back in the app: bg sounds on while the video starts again, muted, where bg is; once it
+ *  plays at the same moment it takes the sound back. If it doesn't start, it goes as without seamless. */
+function catchUp() {
+  const lecture = S.picked, ours = () => bgOn && S.picked === lecture && !document.hidden;
+  const handBack = () => {
+    clearTimeout(giveUp);
+    video.removeEventListener("playing", onPlaying);
+    video.removeEventListener("seeked", handBack);
+    if (!ours()) return;
+    bgOn = false;
+    quietVideo(false);
+    if (!S.playing) { bg.pause(); video.pause(); } else { bg.muted = true; followVideo(); }   // paused meanwhile, or bg follows again
+    drawNowPlaying();
+  };
+  const onPlaying = () => {
+    video.removeEventListener("playing", onPlaying);
+    if (Math.abs(bg.currentTime - video.currentTime) <= 0.15) return handBack();
+    video.addEventListener("seeked", handBack, { once: true });
+    video.currentTime = bg.currentTime + 0.05;   // the picture jumps; the sound goes on
+  };
+  const start = () => {
+    if (!ours()) return;
+    quietVideo(true);
+    video.addEventListener("playing", onPlaying);
+    video.currentTime = bg.currentTime;
+    video.play().catch(() => {});
+  };
+  const giveUp = setTimeout(() => {
+    video.removeEventListener("playing", onPlaying);
+    video.removeEventListener("seeked", handBack);
+    if (!ours()) return;
+    const t = bg.currentTime;
+    bgOn = false;
+    bg.pause();
+    quietVideo(false);
+    video.currentTime = t;
+    video.play().catch(() => {});
+  }, 8000);
+  if (video.readyState && !S.swapping) start();
+  else video.addEventListener("loadedmetadata", start, { once: true });
+}
+
 document.addEventListener("visibilitychange", () => {
   if (!document.hidden) toForeground();
   else if (BG && S.playing && !bgOn && !player.hidden && !video.ended && hasPicture()) playHidden();
@@ -2915,6 +3007,12 @@ for (const r of lockChoices) r.addEventListener("change", () => {
   drawLockButtons();
   drawSteps();
 });
+$("seamlessSet").hidden = !BG;   // a computer plays on by itself
+$("seamless").addEventListener("change", () => {
+  prefs.seamless = $("seamless").checked;
+  savePrefs();
+  followVideo();   // bg starts following the video, or stops
+});
 
 // ⋯ Settings → This lecture, and the bar's star: a library lecture's star, as in the list.
 $("starBtn").innerHTML = STAR_SVG;
@@ -2945,6 +3043,7 @@ function openSettings() {
   drawTranscriptLinks();
   drawThisLecture();
   for (const r of lockChoices) r.checked = r.value === prefs.lockButtons;
+  $("seamless").checked = prefs.seamless;
   $("settings").showModal();
   renderGet();
 }
@@ -2974,7 +3073,9 @@ function goHome() {
   if (arranging) setArranging(false);
   if (!lockLayer.hidden) setLocked(false);
   pausePlayback();
+  video.pause();   // also while it caught up with bg, muted (seamless)
   bgOn = false;
+  stopFollowing();
   quietVideo(false);
   save();
   player.hidden = true;

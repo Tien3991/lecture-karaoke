@@ -33,7 +33,12 @@ So on a phone the lecture's stream is loaded in an audio player too, and when th
 the lecture plays, its sound goes on from there, from the same moment at the same speed; back in the
 app the video takes over from where the sound is. The sound stops for a moment at the switch: the
 phone has stopped the video before the app hears of it, and the audio player then fetches the sound
-from that moment. While it plays, the video is muted as well as paused, so that the lock screen
+from that moment. ⋯ Settings → *Lock screen* → *No pause when the screen locks* (off at first, kept on
+the device) avoids that: while you watch, the audio player plays along with the video, silently, kept
+in step by playing a little faster or slower, so at the switch it only has to be heard. Coming back,
+the video starts again silently where the sound is and takes it over once it plays there. The lecture
+is then streamed twice while you watch: twice the data. While the audio player plays, the video is
+muted as well as paused, so that the lock screen
 follows the audio player (it would show the paused video's ▶ otherwise). A lecture that ends
 meanwhile is followed as the end mode says, and so are the lock screen's previous and next buttons:
 the phone allows a new start only right away, so the links of the lectures that may come next are
