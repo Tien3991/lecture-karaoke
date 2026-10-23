@@ -22,7 +22,7 @@ import { applyNoteChanges, newNoteId, noteStamp, shownNotes } from "./core/notes
 import * as store from "./core/store.js";
 import { zipFiles } from "./core/zip.js";
 
-const VERSION = "2.11.0";
+const VERSION = "2.11.1";
 // Proportions of the burned vertical video (identical in every pipeline calibration), in em of
 // the main subtitle text: line limit, frame width, and the height the three blocks need.
 const FIT_EM = 892.4 / 67.797, FRAME_EM = 1080 / 67.797, PANEL_EM = 14.4, CTX_SCALE = 74 / 93;
@@ -2584,6 +2584,7 @@ function stepLecture(dir) {
   const now = ensureScope() && openItem(), it = now && neighbor(scopeList(), now, dir);
   if (!it) return;
   scope.coming = null;
+  save();            // the lecture left keeps the very spot
   startHidden(it);   // from the lock screen
   playItem(it, scope);
 }
@@ -3072,7 +3073,8 @@ for (const [id, kind] of [["txText", "text"], ["txJson", "json"]]) {
 // ---------------------------------------------------------------- remembering, wake lock, toast
 let toastTimer = 0;
 function save() {
-  if (!S.id) return;
+  // not while bg plays a lecture that isn't open yet (startHidden): its time isn't this one's
+  if (!S.id || (bgOn && bgLecture !== S.picked)) return;
   S.rec.position = media().currentTime || S.rec.position || 0;
   Object.assign(S.rec, { syncMs: S.syncMs, language: S.language });
   delete S.rec.leadMs;        // 1.0.x kept the lead per transcript; it is a viewer preference now
