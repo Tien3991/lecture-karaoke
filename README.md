@@ -89,7 +89,11 @@ says what happens when it ends in the app; each tap goes to the next of three:
 - shuffle (crossed arrows, in the highlight color): a random one (those with a transcript first),
   until each has played once.
 
-The next lecture starts right away. Leaving the player (‹) sets the button back to stop, so each
+The next lecture starts right away, without a gap: 30 seconds before the end the app readies it
+(its Dropbox link, its transcript and the start of its sound, in the audio player that plays on when
+the screen locks), so its sound starts the moment the lecture ends, while it opens; the video loads
+it a little ahead and takes over when the sound gets there, a second or two later (the picture shows
+it from then on). Leaving the player (‹) sets the button back to stop, so each
 lecture opened starts with it there; *Play by tag* sets it to in order or shuffle for its list. With
 the screen locked a lecture just ends. ⏮ and ⏭ go through the same folder or list in order, whatever
 the mode.
@@ -129,9 +133,12 @@ under the recent lectures, the videos and recordings in that folder, a section
 per course subfolder, with search and a badge each: *Ready*, *Transcribing*, *Not transcribed* or
 *Failed*. A long name takes two lines. A file not played yet on any device is marked **New**
 (`played.json` in the repository; a file counts as played once it starts playing, and each device
-adds, the first time, the lectures it played before). Each folder's header has three
+adds, the first time, the lectures it played before). Each folder's header has four
 buttons: the crossed arrows play a random lecture from the folder, at once (one with a transcript,
-when it has any; while searching, one of those found); the arrow down saves the transcripts of the
+when it has any; while searching, one of those found); the list with a play sign plays the folder
+in order to its end (the end button set to in order), from its first new lecture, or, when none is
+new, from the one played last on this device (where it was left), else from its first; the arrow
+down saves the transcripts of the
 lectures listed in one ZIP (each as `.txt`, a sentence per line, and `.json`, with word timings,
 with the word fixes on GitHub and the device's, plus *All transcripts.txt* with all the text, a
 `#` heading per lecture; on a phone **Save ZIP** opens the share sheet); and the pin keeps the
