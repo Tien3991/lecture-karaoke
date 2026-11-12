@@ -22,7 +22,7 @@ import { applyNoteChanges, newNoteId, noteStamp, shownNotes } from "./core/notes
 import * as store from "./core/store.js";
 import { zipFiles } from "./core/zip.js";
 
-const VERSION = "3.1.0";
+const VERSION = "3.2.0";
 // Proportions of the burned vertical video (identical in every pipeline calibration), in em of
 // the main subtitle text: line limit, frame width, and the height the three blocks need.
 const FIT_EM = 892.4 / 67.797, FRAME_EM = 1080 / 67.797, PANEL_EM = 14.4, CTX_SCALE = 74 / 93;
@@ -152,9 +152,11 @@ function connect(cfg) {
   connectDropbox().then(() => { loadLibrary(); renderGet(); });
 }
 /** A repository file through this device's copy: offline it opens anyway, and an unchanged file
- *  isn't downloaded again. {text, etag} or null when the file doesn't exist. */
-async function repoFile(path) {
+ *  isn't downloaded again. {text, etag} or null when the file doesn't exist; `kept`: only this
+ *  device's copy (null without one), GitHub isn't asked. */
+async function repoFile(path, kept = false) {
   const key = `gh:${gh.repo}:${path}`, cached = await store.getFile(key);
+  if (kept) return cached ?? null;
   try {
     const got = await gh.readText(path, cached);
     if (got && got !== cached) await store.putFile(key, got);
@@ -164,30 +166,41 @@ async function repoFile(path) {
     throw err;
   }
 }
-async function repoIndex() {
-  const f = await repoFile("index.json");
+async function repoIndex(kept = false) {
+  const f = await repoFile("index.json", kept);
   return f ? JSON.parse(f.text) : { version: 1, videos: [] };
 }
 
 // ---------------------------------------------------------------- Dropbox
 // The app's own Dropbox folder (core/dropbox.js), reached with the refresh token in the
 // repository's config/dropbox.json: a device connected to GitHub needs nothing more. The folder's
-// listing is kept on the device with Dropbox's cursor, so later visits only ask what changed.
+// listing is kept on the device with Dropbox's cursor: the library shows it as it was listed last
+// time, and Dropbox is asked again (only what changed) on Check now, or after the app changed the
+// folder itself. Opening the app asks Dropbox nothing: the config is this device's copy too
+// (GitHub's is read meanwhile, in case it changed).
 let dbx = null, dbxReady = Promise.resolve(null);
 function connectDropbox() {
-  const mine = gh;
+  const mine = gh, base = devUrl("dropbox");
   dbx = null;
-  dbxReady = !gh ? Promise.resolve(null) : repoFile("config/dropbox.json").then((f) => {
-    const cfg = f && JSON.parse(f.text), base = devUrl("dropbox");
-    if (gh !== mine || !cfg?.app_key || !cfg?.refresh_token) return null;
-    return (dbx = new Dropbox({ appKey: cfg.app_key, refreshToken: cfg.refresh_token, ...(base ? { api: base, content: `${base}/content` } : {}) }));
-  }).catch(() => null);
+  const use = (f) => {
+    const cfg = f && JSON.parse(f.text);
+    if (gh !== mine || !cfg?.app_key || !cfg?.refresh_token) return dbx;
+    if (dbx?.appKey !== cfg.app_key || dbx.refreshToken !== cfg.refresh_token) {
+      dbx = new Dropbox({ appKey: cfg.app_key, refreshToken: cfg.refresh_token, ...(base ? { api: base, content: `${base}/content` } : {}) });
+    }
+    return dbx;
+  };
+  if (!gh) return (dbxReady = Promise.resolve(null));
+  const asked = repoFile("config/dropbox.json").then(use).catch(() => dbx);
+  dbxReady = repoFile("config/dropbox.json", true).then((kept) => (kept ? use(kept) : asked)).catch(() => null);
   return dbxReady;
 }
 const listed = (e) => ({ name: e.name, path_lower: e.path_lower, path_display: e.path_display, size: e.size, content_hash: e.content_hash });
-/** The app folder's files, brought up to date: {files, offline}. Offline, the copy kept here. */
-async function dropboxFiles() {
+/** The app folder's files, {files, offline}: as listed last time (kept here), or brought up to date
+ *  by Dropbox when `fresh` or when none are kept. Offline, the copy kept here. */
+async function dropboxFiles(fresh = false) {
   const key = `dropbox:${dbx.appKey}:files`, kept = await store.getFile(key);
+  if (!fresh && kept?.files) return { files: Object.values(kept.files), offline: false };
   let files = kept?.files ? { ...kept.files } : null, cursor = kept?.cursor;
   try {
     if (files && cursor) {
@@ -236,10 +249,12 @@ async function dropboxFiles() {
 class SharedSet {
   constructor(file, keysOf) { Object.assign(this, { file, keysOf, set: new Set(), at: 0, writing: 0, known: false }); }
   has(key) { return this.set.has(key); }
-  /** The keys the file has now, or null when it can't be read now (the set stays as it is). */
-  async fetch() {
+  /** The keys the file has now, or null when it can't be read now (the set stays as it is);
+   *  `kept`: as this device's copy has them (null without one). */
+  async fetch(kept = false) {
     try {
-      const f = await repoFile(this.file);
+      const f = await repoFile(this.file, kept);
+      if (kept && !f) return null;
       return this.keysOf(f ? JSON.parse(f.text) : null);
     } catch {
       return null;
@@ -282,17 +297,31 @@ library.tags.set = new Map();
 const picking = { on: false, paths: new Set(), busy: "" };   // select mode: the chosen files' paths; busy: progress
 const openFolders = new Set();
 const BADGES = { ready: ["Ready", "ok"], pending: ["Transcribing", "busy"], failed: ["Failed", "bad"], null: ["Not transcribed", "none"] };
-/** Brings the list up to date (one load at a time: a second call gets the running one). */
-function loadLibrary() {
+/** Brings the list up to date (one load at a time: a second call gets the running one). Its files
+ *  are the ones Dropbox listed last time, kept on this device; Dropbox is asked again when `fresh`
+ *  (Check now, a change the app made there) or when none are kept. The first time (an empty list)
+ *  it is drawn at once from this device's copies, then again with the repository's files (index,
+ *  played, tags…) as GitHub has them now. */
+function loadLibrary(fresh = false) {
   $("library").hidden = !dbx;
   if (!dbx) return Promise.resolve();
   if (!library.loading) {
     library.loading = (async () => {
-      try {
-        const started = Date.now(), shared = [library.hidden, library.played, library.pinned, library.unimportant, library.tags];
-        const [{ files, offline }, index, ...got] = await Promise.all([dropboxFiles(), repoIndex(), ...shared.map((s) => s.fetch())]);
+      const shared = [library.hidden, library.played, library.pinned, library.unimportant, library.tags];
+      const show = (files, index, got, started) => {
         library.items = mergeLibrary(files, index.videos || []);
         shared.forEach((s, i) => s.take(got[i], started));
+      };
+      try {
+        const kept = !library.items.length && !fresh && (await store.getFile(`dropbox:${dbx.appKey}:files`))?.files;
+        if (kept) {
+          const started = Date.now(), [index, ...got] = await Promise.all([repoIndex(true), ...shared.map((s) => s.fetch(true))]);
+          show(Object.values(kept), index, got, started);
+          drawLibrary();
+        }
+        const started = Date.now();
+        const [{ files, offline }, index, ...got] = await Promise.all([dropboxFiles(fresh), repoIndex(), ...shared.map((s) => s.fetch())]);
+        show(files, index, got, started);
         library.note = offline ? "Offline: the list as it was last time." : "";
         if (!offline) sharePlayed();
       } catch (err) {
@@ -790,7 +819,7 @@ async function deleteChosen(items) {
   drawLibrary();
   drawRecent();
   await library.loading;   // a listing begun before the deletions would bring them back: list again after it
-  loadLibrary();
+  loadLibrary(true);
 }
 async function forgetRecent(path) {
   for (const r of await store.list()) {
@@ -802,6 +831,8 @@ async function forgetRecent(path) {
 $("libCheck").addEventListener("click", async () => {
   $("libCheck").disabled = true;
   try {
+    await library.loading;   // a load already running would keep the list as it was
+    await loadLibrary(true);   // the list as Dropbox has it now
     await gh.dispatch("");
     library.watchUntil = Date.now() + 20 * 60000;
     toast("The transcription job is looking for new files; it takes a few minutes.");
@@ -811,7 +842,8 @@ $("libCheck").addEventListener("click", async () => {
     $("libCheck").disabled = false;
   }
 });
-// While anything is being transcribed (or just after Check now), the list refreshes every minute.
+// While anything is being transcribed (or just after Check now), the list's statuses refresh every
+// minute from the repository (Dropbox isn't asked again).
 setInterval(() => {
   if (dbx && player.hidden && (Date.now() < library.watchUntil || library.items.some((i) => i.status === "pending"))) loadLibrary();
 }, 60000);
@@ -1296,7 +1328,7 @@ async function checkDropbox(w) {
   w.checking = "Looking in Dropbox…";
   renderGet();
   try {
-    const { files, offline } = await dropboxFiles();
+    const { files, offline } = await dropboxFiles(true);
     const same = files.filter((f) => f.size === size && MEDIA_FILE.test(f.name) && !f.path_lower.startsWith(STAGING))
       .sort((a, b) => (b.name === name) - (a.name === name));
     let found = (w.entry?.dropbox?.hash && same.find((f) => f.content_hash === w.entry.dropbox.hash)) || null;
@@ -1366,7 +1398,7 @@ async function startJob(w, fields) {
   }
   startPolling();
   renderGet();
-  loadLibrary();
+  loadLibrary(true);   // it may be a file just put in Dropbox
 }
 
 /** In Dropbox without a transcript: the job transcribes it from there. */
@@ -1399,7 +1431,7 @@ async function placeInIndex(w) {
     if (!e || (e.dropbox?.hash === hash && e.dropbox?.path === path)) return undefined;
     return withEntry(cur, (w.entry = changedEntry(e, { folder: folderOf(path), dropbox: { path, hash }, updated: isoNow() })));
   }, `${videoFields(w.picked).name} is in Dropbox`);
-  loadLibrary();
+  loadLibrary(true);
 }
 
 /** Way C: only the audio goes to Dropbox, copied out of the video (about 1 MB a minute), into the

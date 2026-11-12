@@ -154,7 +154,11 @@ in order** plays them one after another, **Shuffle** in random order until each 
 a lecture in the list starts the order there. The choice is kept on the device. A tap streams the file (a temporary link, renewed before
 its 4 hours are up, or at once if it stops on an expired link, keeping the position). Files put in
 Dropbox from any device are transcribed by the job, `.github/workflows/transcribe.yml` in the
-repository: on its schedule, or right away with *Check now*.
+repository: on its schedule, or right away with *Check now*. The list of files is kept on the
+device: opening the app shows it at once, as Dropbox listed it last time, and asks Dropbox nothing;
+*Check now* gets it from Dropbox again (only what changed), as do the app's own uploads and
+deletions. What the repository knows of the files (transcripts, *New*, tags, pins) is drawn from the
+device's copy at once too, then brought up to date from GitHub.
 
 The job transcribes speech as English unless a folder name says otherwise. A folder whose name
 ends in `___` and a two-letter language code sets the language of everything in it, subfolders
