@@ -22,7 +22,7 @@ import { applyNoteChanges, newNoteId, noteStamp, shownNotes } from "./core/notes
 import * as store from "./core/store.js";
 import { zipFiles } from "./core/zip.js";
 
-const VERSION = "3.2.0";
+const VERSION = "3.3.0";
 // Proportions of the burned vertical video (identical in every pipeline calibration), in em of
 // the main subtitle text: line limit, frame width, and the height the three blocks need.
 const FIT_EM = 892.4 / 67.797, FRAME_EM = 1080 / 67.797, PANEL_EM = 14.4, CTX_SCALE = 74 / 93;
@@ -407,7 +407,7 @@ function drawLibrary() {
     };
     const pin = tool(g.pinned ? `Unpin “${name}”` : `Pin “${name}” to the top`, PIN_SVG, () => setPinned(g.folder, !g.pinned, name));
     pin.setAttribute("aria-pressed", String(g.pinned));
-    tools.append(tool(`Play a random lecture from “${name}”`, SHUFFLE_SVG, () => { const it = randomPick(g.items); if (it) playItem(it); }));
+    tools.append(tool(`Play a random lecture from “${name}”`, SHUFFLE_SVG, () => { const it = randomPick(g.items); if (it) playItem(it, undefined, { fromStart: true }); }));
     tools.append(tool(`Play “${name}” in order, from its first new lecture (or the one played last)`, LIST_SVG, () => playFolderOn(g.folder)));
     if (g.items.some((i) => i.status === "ready")) {
       tools.append(tool(`Download the transcripts of “${name}”`, DOWNLOAD_SVG, () => downloadFolder(g.folder, g.items)));
@@ -570,7 +570,7 @@ function playList(list, first, shuffle) {
   const label = [...tagChoice().tags].map((t) => allTags(library.tags.set).find((x) => x.toLowerCase() === t) ?? t).join(", ");
   const start = first ?? (shuffle ? randomOther(list, null) : list[0]);
   setEndMode(shuffle ? "shuffle" : "next");
-  playItem(start, { list, label, played: new Set() });
+  playItem(start, { list, label, played: new Set() }, { fromStart: !first });   // a lecture tapped in the list resumes
 }
 
 /** Pins a folder to the top of the list (pin false: back in its place), on every device: pinned.json. */
@@ -880,25 +880,28 @@ async function dropboxMediaInfo(it) {
 
 /** Streams a library video, which plays at once: with its transcript when it has one, else while it
  *  waits. It plays among `within` (a scope: a list by tag, or the folder it is stepped through), else
- *  among its folder's lectures. */
-async function openFromDropbox(it, within) {
+ *  among its folder's lectures. It goes on where it was left, unless `fromStart`: only a lecture
+ *  picked from a list resumes, not one that follows another (the end mode, ⏮/⏭) or a random one. */
+async function openFromDropbox(it, within, { fromStart = false } = {}) {
   allowMedia();   // a tap in the list, on shuffle, on a recent lecture or Play by tag
   if (!dbx || library.opening) return;
   library.opening = true;
   setProblems([]);
   $("libNote").textContent = `Opening ${it.name}…`;
   try {
+    const linking = linkFor(it.path), ref = it.entry?.transcript ? `gh:${gh.repo}:${it.entry.transcript}` : null;
+    const reading = ref && ((upNext?.it.path === it.path && upNext.text) || transcriptFile(ref).catch(() => null));   // meanwhile
+    linking.catch(() => {});   // thrown below
     const { info, fingerprint, audio, art } = await dropboxMediaInfo(it);
-    const { link, fetched } = await linkFor(it.path);
+    const { link, fetched } = await linking;
     const picked = { url: link, name: it.name, size: it.size, info, fingerprint, audio: !!audio, art: art ?? null,
       dropbox: { path: it.path, hash: it.hash } };
     // an entry found by name and size must be this very video
     const entry = it.entry && (!it.entry.fingerprint || it.entry.fingerprint === fingerprint) ? it.entry : null;
     if (entryStatus(entry) === "ready") {
-      const ref = `gh:${gh.repo}:${entry.transcript}`;
-      const text = (upNext?.it.path === it.path && upNext.text) || await transcriptFile(ref);   // readied ahead
+      const text = (await reading) || await transcriptFile(ref);
       if (!text) throw new Error("its transcript isn't on this device, and GitHub can't be reached.");
-      await openPair(JSON.parse(text), picked, { ref, key: entry.key, sure: true });
+      await openPair(JSON.parse(text), picked, { ref, key: entry.key, sure: true, fromStart });
     } else {
       openWaiting(picked);
     }
@@ -910,6 +913,7 @@ async function openFromDropbox(it, within) {
     }
   } catch (err) {
     setProblems([`Could not open ${it.name}: ${err.message}`]);
+    if (!player.hidden) toast(`Could not open ${it.name}: ${err.message}`);   // the next one, in the player
   } finally {
     library.opening = false;
     drawLibrary();
@@ -1165,7 +1169,7 @@ async function openPair(data, picked, src) {
     $("startBtn").disabled = false;
     return;
   }
-  showVideo(picked, rec.position);
+  showVideo(picked, src.fromStart ? 0 : rec.position);
   await useTranscript(data, picked, src, rec);
   if (S.picked === picked) resume();   // a lecture opened plays at once
 }
@@ -2658,10 +2662,11 @@ function openItem() {
   const d = S.picked?.dropbox, fp = S.picked?.fingerprint;
   return library.items.find((i) => (d?.path ? i.path === d.path : fp && i.entry?.fingerprint === fp)) ?? null;
 }
-/** Opens a library lecture, which then plays: among `within` (a scope), else among its folder's. */
-async function playItem(it, within) {
+/** Opens a library lecture, which then plays: among `within` (a scope), else among its folder's;
+ *  from where it was left, or from its start (`opts.fromStart`). */
+async function playItem(it, within, opts) {
   const fresh = library.items.find((i) => i.path === it.path) ?? it;   // a list keeps its items as they were
-  await openFromDropbox(fresh, within);
+  await openFromDropbox(fresh, within, opts);
 }
 /** The scope; a lecture opened another way that is in the library too (a copy on this device) plays
  *  among its folder's. */
@@ -2670,12 +2675,14 @@ function ensureScope() {
   if (now) scope = { folder: now.folder, played: new Set() };
   return scope;
 }
-/** The bar's previous (-1) and next (1) buttons. */
+/** The bar's previous (-1) and next (1) buttons: that lecture from its start. */
 function stepLecture(dir) {
   const now = ensureScope() && openItem(), it = now && neighbor(scopeList(), now, dir);
   if (!it) return;
   save();   // the lecture left keeps the very spot
-  playItem(it, scope);
+  pausePlayback();
+  showComing(it);
+  playItem(it, scope, { fromStart: true });
 }
 function drawSteps() {
   const now = ensureScope() && openItem(), list = scopeList(), can = (dir) => !!(now && neighbor(list, now, dir));
@@ -2731,7 +2738,25 @@ function lectureEnded() {
     S.playing = true;
     bg.play().catch(() => { if (bg.paused) bgOn = false; });   // then it opens as usual
   }
-  playItem(it, scope).then(() => { if (bgOn && !document.hidden && bgUrl !== S.videoUrl) { bgOn = false; bg.pause(); } });   // it didn't open
+  showComing(it);
+  playItem(it, scope, { fromStart: true }).then(() => { if (bgOn && !document.hidden && bgUrl !== S.videoUrl) { bgOn = false; bg.pause(); } });   // it didn't open
+}
+/** As the next lecture opens, before anything about it is fetched: its name and length (the index's)
+ *  in the bar, the window's title and on the lock screen, and the subtitles of the one before give way
+ *  to a line saying it loads. */
+function showComing(it) {
+  $("barTitle").textContent = $("barTitle").title = it.name;
+  document.title = `${lectureTitle(it)} · Lecture Karaoke`;
+  $("time").textContent = clock(0);
+  $("timeEnd").textContent = clock((it.entry?.duration_ms || 0) / 1000);
+  $("seek").value = 0;
+  S.events = [];   // the karaoke of the one before stops
+  S.shown = -2;
+  draw(-1);
+  $("next").textContent = `Loading ${lectureTitle(it)}…`;
+  if (mediaSession && typeof MediaMetadata === "function") {
+    try { mediaSession.metadata = new MediaMetadata({ title: lectureTitle(it), artist: shownFolder(it.folder), album: "Lecture Karaoke" }); } catch { /* not here */ }
+  }
 }
 const END_LOOKS = {
   stay: { svg: () => STAY_SVG, says: "When this lecture ends, playback stops." },
@@ -2911,10 +2936,10 @@ document.addEventListener("visibilitychange", () => {
 
 // The next lecture, ready ahead (in the app, while the end mode goes on to another one): 30 s before
 // the lecture playing ends, the one that comes next gets its link and transcript, and bg loads its
-// sound, muted and paused where it starts (readyNext). When the lecture ends, bg sounds the next one
+// sound, muted and paused at its start (readyNext). When the lecture ends, bg sounds the next one
 // at once while it opens (lectureEnded); the video loads it a moment ahead of bg and takes the sound
 // over when bg gets there (takeOver). A lecture readied too late opens as usual, with a gap.
-let upNext = null;   // {it, link, start, text, buffered}
+let upNext = null;   // {it, link, text, buffered}
 video.addEventListener("timeupdate", () => {
   if (upNext || endMode === "stay" || bgOn || document.hidden || player.hidden || video.paused || !(video.duration > 0)) return;
   if ((video.duration - video.currentTime) / (video.playbackRate || 1) <= 30) readyNext();
@@ -2922,28 +2947,22 @@ video.addEventListener("timeupdate", () => {
 async function readyNext() {
   const now = dbx && ensureScope() && openItem(), it = now && nextAfter(now);
   if (!it) return;
-  const ready = (upNext = { it, link: null, start: 0, text: null, buffered: false });
+  const ready = (upNext = { it, link: null, text: null, buffered: false });
   try {
     const ref = it.status === "ready" && it.entry?.transcript ? `gh:${gh.repo}:${it.entry.transcript}` : null;
-    const [{ link }, start, text] = await Promise.all([linkFor(it.path), startOf(it), ref && transcriptFile(ref), dropboxMediaInfo(it)]);
+    const [{ link }, text] = await Promise.all([linkFor(it.path), ref && transcriptFile(ref), dropboxMediaInfo(it)]);
     if (upNext !== ready || bgOn) return;
-    Object.assign(ready, { link, start, text });
+    Object.assign(ready, { link, text });
     bgUrl = link;
     bg.muted = true;
-    bg.src = `${link}#t=${start.toFixed(3)}`;
+    bg.src = link;   // it plays from its start (only a lecture picked from a list resumes)
     bg.defaultPlaybackRate = bg.playbackRate = folderRate(it.folder);
     await bg.play();   // that loads it
     if (upNext !== ready || bgOn) return;
     bg.pause();
-    bg.currentTime = start;
+    bg.currentTime = 0;
     ready.buffered = true;
   } catch { /* it opens as usual */ }
-}
-/** Where a lecture would start: where it was left, as showVideo has it. */
-async function startOf(it) {
-  const rec = it.status === "ready" ? await store.load(it.entry?.id || it.name) : {};
-  const at = rec.position || 0, dur = (it.entry?.duration_ms || 0) / 1000;
-  return at > 5 && !(dur && at >= dur - 10) ? at : 0;
 }
 /** In the app, while bg sounds the lecture just opened: the video loads it a little ahead of bg,
  *  muted, and when bg gets there it plays on from there with the sound, and bg stops. If the video

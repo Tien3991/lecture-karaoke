@@ -76,7 +76,9 @@ button added in a later release appears where the default bar has it.
 | keyboard | space play/pause, ←/→ 5 s, ↑/↓ preset speeds, `−`/`+` 0.05× slower/faster, `L` offset, `H` soft highlight, `E` fix, `N` notes, `F` full screen |
 
 The app remembers, per transcript, where you stopped, the sync fine-tune, the language and your
-fixes; speed, offset, layout and highlight are remembered on the device for every lecture. The
+fixes. A lecture you pick (in the library, the recent list or a *Play by tag* list, or with a
+folder's in-order button) goes on from where you stopped; one the app moves to (the next one when a
+lecture ends, ⏮ and ⏭, a random one) starts from its beginning; speed, offset, layout and highlight are remembered on the device for every lecture. The
 speed is kept per Dropbox folder: a lecture opens at the speed last chosen for its folder (a folder
 without one, or a file not in Dropbox, at the speed chosen last anywhere).
 
@@ -89,11 +91,12 @@ says what happens when it ends in the app; each tap goes to the next of three:
 - shuffle (crossed arrows, in the highlight color): a random one (those with a transcript first),
   until each has played once.
 
-The next lecture starts right away, without a gap: 30 seconds before the end the app readies it
-(its Dropbox link, its transcript and the start of its sound, in the audio player that plays on when
-the screen locks), so its sound starts the moment the lecture ends, while it opens; the video loads
-it a little ahead and takes over when the sound gets there, a second or two later (the picture shows
-it from then on). Leaving the player (‹) sets the button back to stop, so each
+The next lecture starts right away, from its beginning, without a gap: 30 seconds before the end the
+app readies it (its Dropbox link, its transcript and the start of its sound, in the audio player that
+plays on when the screen locks), so its sound starts the moment the lecture ends, while it opens; the
+video loads it a little ahead and takes over when the sound gets there, a second or two later (the
+picture shows it from then on). Its name and length show at once, with a line saying it loads, also
+when it wasn't readied (then it takes a moment longer). Leaving the player (‹) sets the button back to stop, so each
 lecture opened starts with it there; *Play by tag* sets it to in order or shuffle for its list. With
 the screen locked a lecture just ends. ⏮ and ⏭ go through the same folder or list in order, whatever
 the mode.
