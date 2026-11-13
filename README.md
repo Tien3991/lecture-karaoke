@@ -91,12 +91,11 @@ says what happens when it ends in the app; each tap goes to the next of three:
 - shuffle (crossed arrows, in the highlight color): a random one (those with a transcript first),
   until each has played once.
 
-The next lecture starts right away, from its beginning, without a gap: 30 seconds before the end the
-app readies it (its Dropbox link, its transcript and the start of its sound, in the audio player that
-plays on when the screen locks), so its sound starts the moment the lecture ends, while it opens; the
-video loads it a little ahead and takes over when the sound gets there, a second or two later (the
-picture shows it from then on). Its name and length show at once, with a line saying it loads, also
-when it wasn't readied (then it takes a moment longer). Leaving the player (‹) sets the button back to stop, so each
+The next lecture starts right away, from its beginning: its name and length show at once, with a
+line saying it loads, and it plays after a moment, once its video has loaded. 30 seconds before the
+end the app fetches its Dropbox link and its transcript, so that it opens quickly. (3.1.0 to 3.3.0
+also played its sound ahead while the video caught up; on iPhone the picture stayed blank until
+paused and played again, so it loads like any other lecture now.) Leaving the player (‹) sets the button back to stop, so each
 lecture opened starts with it there; *Play by tag* sets it to in order or shuffle for its list. With
 the screen locked a lecture just ends. ⏮ and ⏭ go through the same folder or list in order, whatever
 the mode.

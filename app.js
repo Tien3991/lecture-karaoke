@@ -22,7 +22,7 @@ import { applyNoteChanges, newNoteId, noteStamp, shownNotes } from "./core/notes
 import * as store from "./core/store.js";
 import { zipFiles } from "./core/zip.js";
 
-const VERSION = "3.3.0";
+const VERSION = "3.3.1";
 // Proportions of the burned vertical video (identical in every pipeline calibration), in em of
 // the main subtitle text: line limit, frame width, and the height the three blocks need.
 const FIT_EM = 892.4 / 67.797, FRAME_EM = 1080 / 67.797, PANEL_EM = 14.4, CTX_SCALE = 74 / 93;
@@ -1181,7 +1181,7 @@ function showVideo(picked, resumeAt = 0) {
   if (S.videoUrl?.startsWith("blob:")) URL.revokeObjectURL(S.videoUrl);
   S.videoUrl = picked.file ? URL.createObjectURL(picked.file) : picked.url;
   Object.assign(S, { picked, videoName: name, swapping: false, playing: false, folder: lectureFolder(picked) });
-  upNext = null;   // the lecture after this one is readied near its end
+  upNext = null;   // the lecture after this one is fetched near its end
   setNotesOpen(false);   // they belong to the lecture before
   scope = null;          // openFromDropbox sets it
   noteInput.value = "";
@@ -1779,7 +1779,7 @@ function draw(e) {
 }
 function render() {
   if (S.swapping) return;   // a renewed Dropbox link loads from 0 until it is back at the position
-  const m = media(), t = m.currentTime * 1000;   // bg, while it sounds a lecture readied ahead
+  const t = video.currentTime * 1000;
   const e = S.events.length ? activeEvent(S.events, t) : -1;
   if (S.events.length && e !== S.shown) { draw(e); S.shown = e; S.spoken = -1; }
   if (e >= 0) {
@@ -1789,15 +1789,15 @@ function render() {
       S.spoken = n;
     }
   }
-  const sec = Math.floor(m.currentTime);
+  const sec = Math.floor(video.currentTime);
   if (sec !== S.lastSecond) {
     S.lastSecond = sec;
-    $("time").textContent = clock(m.currentTime);
-    $("timeEnd").textContent = clock(m.duration);
-    if (document.activeElement !== $("seek") && m.duration) $("seek").value = (m.currentTime / m.duration) * 1000;
+    $("time").textContent = clock(video.currentTime);
+    $("timeEnd").textContent = clock(video.duration);
+    if (document.activeElement !== $("seek") && video.duration) $("seek").value = (video.currentTime / video.duration) * 1000;
   }
 }
-requestAnimationFrame(function loop() { render(); requestAnimationFrame(loop); });   // from the first frame: render reads bg, set up below
+(function loop() { render(); requestAnimationFrame(loop); })();
 for (const ev of ["seeked", "seeking", "ratechange", "pause", "play", "loadeddata"]) video.addEventListener(ev, render);
 video.addEventListener("durationchange", () => { S.lastSecond = -1; render(); });   // show the length once known
 
@@ -2645,7 +2645,7 @@ function syncNotes() {
 // in that order, whatever the end mode. The end mode button says what happens when a lecture ends in
 // the app: playback stops; the next one plays, up to the last one; or a random one plays (transcribed
 // ones first) until each has played once. The two that go on are drawn in the highlight color, and
-// the lecture that comes next is readied ahead, so that it follows without a gap (readyNext). Leaving
+// the lecture that comes next is fetched ahead, so that it opens quickly (readyNext). Leaving
 // the player sets it back to stop. A folder's in-order button plays it to its end from its first new
 // lecture (playFolderOn).
 let scope = null;   // {folder} or {list, label}, with played: the paths played in it (for random)
@@ -2717,7 +2717,7 @@ function pickRandom(now) {
   return randomOther(scopeList(), now, scope.played);
 }
 /** The lecture that follows `now` as the end mode says, or null: the next one, or a random one (the
- *  one readied ahead, while it still may be). */
+ *  one fetched ahead, while it still may be). */
 function nextAfter(now) {
   if (endMode === "next") return neighbor(scopeList(), now, 1);
   if (endMode !== "shuffle") return null;
@@ -2725,21 +2725,15 @@ function nextAfter(now) {
   return c && c.path !== now.path && !scope.played.has(c.path) && scopeList().some((i) => i.path === c.path) ? c : pickRandom(now);
 }
 /** When a lecture ends in the app: what the end mode says. With the app hidden it just ends. The next
- *  lecture readied ahead sounds from bg at once, while it opens (readyNext). */
+ *  one's name and length show at once, and it opens from its start (fetched ahead: readyNext). */
 function lectureEnded() {
   S.playing = false;
   const now = endMode !== "stay" && !document.hidden && ensureScope() && openItem();
   if (!now) return;
-  const it = nextAfter(now), r = upNext;
+  const it = nextAfter(now);
   if (!it) return toast(endMode === "next" ? `That was the last lecture ${scopeName()}.` : `Every lecture ${scopeName()} has played.`);
-  if (r?.it.path === it.path && r.buffered && bgUrl === r.link && !bgOn) {
-    bg.muted = false;
-    bgOn = true;
-    S.playing = true;
-    bg.play().catch(() => { if (bg.paused) bgOn = false; });   // then it opens as usual
-  }
   showComing(it);
-  playItem(it, scope, { fromStart: true }).then(() => { if (bgOn && !document.hidden && bgUrl !== S.videoUrl) { bgOn = false; bg.pause(); } });   // it didn't open
+  playItem(it, scope, { fromStart: true });
 }
 /** As the next lecture opens, before anything about it is fetched: its name and length (the index's)
  *  in the bar, the window's title and on the lock screen, and the subtitles of the one before give way
@@ -2876,13 +2870,11 @@ function loadBg() {
   bgUrl = S.videoUrl;
   bg.src = bgUrl;
 }
-/** Plays the open lecture: the video, or bg while the app is hidden (or while it sounds the lecture
- *  readied ahead, until the video takes over). */
+/** Plays the open lecture: the video, or bg while the app is hidden. */
 function resume() {
   allowMedia();
   if (player.hidden || !S.videoUrl) return;
   if (BG && document.hidden) playHidden();
-  else if (bgOn && bgUrl === S.videoUrl) takeOver();
   else video.play().catch(() => {});
 }
 function pausePlayback() {
@@ -2901,7 +2893,6 @@ function playHidden(at) {
     } else bg.currentTime = at;
     bg.defaultPlaybackRate = bg.playbackRate = video.playbackRate;
   }
-  bg.muted = false;   // it may have readied the next lecture
   bgOn = true;
   S.playing = true;
   bg.play().catch(() => {
@@ -2934,69 +2925,26 @@ document.addEventListener("visibilitychange", () => {
   else if (BG && S.playing && !bgOn && !player.hidden && !video.ended && hasPicture()) playHidden();
 });
 
-// The next lecture, ready ahead (in the app, while the end mode goes on to another one): 30 s before
-// the lecture playing ends, the one that comes next gets its link and transcript, and bg loads its
-// sound, muted and paused at its start (readyNext). When the lecture ends, bg sounds the next one
-// at once while it opens (lectureEnded); the video loads it a moment ahead of bg and takes the sound
-// over when bg gets there (takeOver). A lecture readied too late opens as usual, with a gap.
-let upNext = null;   // {it, link, text, buffered}
+// The next lecture, fetched ahead (in the app, while the end mode goes on to another one): 30 s
+// before the lecture playing ends, the one that comes next gets its Dropbox link, its transcript and
+// what the player needs to know of the file (readyNext), so that it opens quickly; then it loads and
+// plays as any lecture does, after a moment. (3.1.0 to 3.3.0 also loaded its sound ahead, in bg,
+// which played at once while the video caught up; on iPhone the video didn't load until paused and
+// played again.)
+let upNext = null;   // {it, text}
 video.addEventListener("timeupdate", () => {
-  if (upNext || endMode === "stay" || bgOn || document.hidden || player.hidden || video.paused || !(video.duration > 0)) return;
+  if (upNext || endMode === "stay" || document.hidden || player.hidden || video.paused || !(video.duration > 0)) return;
   if ((video.duration - video.currentTime) / (video.playbackRate || 1) <= 30) readyNext();
 });
 async function readyNext() {
   const now = dbx && ensureScope() && openItem(), it = now && nextAfter(now);
   if (!it) return;
-  const ready = (upNext = { it, link: null, text: null, buffered: false });
+  const ready = (upNext = { it, text: null });
   try {
     const ref = it.status === "ready" && it.entry?.transcript ? `gh:${gh.repo}:${it.entry.transcript}` : null;
-    const [{ link }, text] = await Promise.all([linkFor(it.path), ref && transcriptFile(ref), dropboxMediaInfo(it)]);
-    if (upNext !== ready || bgOn) return;
-    Object.assign(ready, { link, text });
-    bgUrl = link;
-    bg.muted = true;
-    bg.src = link;   // it plays from its start (only a lecture picked from a list resumes)
-    bg.defaultPlaybackRate = bg.playbackRate = folderRate(it.folder);
-    await bg.play();   // that loads it
-    if (upNext !== ready || bgOn) return;
-    bg.pause();
-    bg.currentTime = 0;
-    ready.buffered = true;
+    const [, text] = await Promise.all([linkFor(it.path), ref && transcriptFile(ref), dropboxMediaInfo(it)]);
+    if (upNext === ready) ready.text = text;
   } catch { /* it opens as usual */ }
-}
-/** In the app, while bg sounds the lecture just opened: the video loads it a little ahead of bg,
- *  muted, and when bg gets there it plays on from there with the sound, and bg stops. If the video
- *  isn't there in time it goes further ahead (three times at most, then it takes over where bg is);
- *  a pause, a seek, or bg stuck for 2 s, hands over at once. */
-function takeOver() {
-  S.playing = true;
-  video.muted = true;
-  let lead = 1.5, aimed = 0, tries = 0, bgAt = -1, moved = performance.now();
-  const aim = () => { video.currentTime = aimed = Math.min(bg.currentTime + lead * (bg.playbackRate || 1), Math.max(0, (video.duration || Infinity) - 1)); };
-  const handOver = () => {
-    bgOn = false;
-    bg.pause();
-    video.muted = false;
-    if (S.playing) video.play().catch(() => {});
-  };
-  const step = () => {
-    if (!bgOn || bgUrl !== S.videoUrl) return;   // taken over already (toForeground, back in the app)
-    if (bg.paused) { video.currentTime = bg.currentTime; return handOver(); }   // the viewer's pause: the video keeps the spot
-    if (bg.currentTime !== bgAt) { bgAt = bg.currentTime; moved = performance.now(); }
-    else if (performance.now() - moved > 2000) { video.currentTime = bgAt; return handOver(); }   // bg is stuck: the video goes on
-    if (!video.seeking && Math.abs(video.currentTime - aimed) > 0.5) return handOver();   // the viewer moved it
-    const d = aimed - bg.currentTime;
-    if (d <= 0.02 && d > -0.3 && video.readyState >= 2 && !video.seeking) return handOver();   // bg got there
-    if (d <= -0.3) {   // bg went past it: the video wasn't there in time
-      if (++tries > 3) { video.currentTime = bg.currentTime; return handOver(); }
-      lead *= 2;
-      aim();
-    }
-    requestAnimationFrame(step);
-  };
-  const go = () => { aim(); requestAnimationFrame(step); };
-  if (video.readyState) go();
-  else video.addEventListener("loadedmetadata", go, { once: true });
 }
 
 for (const el of [video, bg]) {
@@ -3241,7 +3189,7 @@ for (const [id, kind] of [["txText", "text"], ["txJson", "json"]]) {
 // ---------------------------------------------------------------- remembering, wake lock, toast
 let toastTimer = 0;
 function save() {
-  if (!S.id || (bgOn && bgUrl !== S.videoUrl)) return;
+  if (!S.id) return;
   S.rec.position = media().currentTime || S.rec.position || 0;
   Object.assign(S.rec, { syncMs: S.syncMs, language: S.language });
   delete S.rec.leadMs;        // 1.0.x kept the lead per transcript; it is a viewer preference now
