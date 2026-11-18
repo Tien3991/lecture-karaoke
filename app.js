@@ -22,7 +22,7 @@ import { applyNoteChanges, newNoteId, noteStamp, shownNotes } from "./core/notes
 import * as store from "./core/store.js";
 import { zipFiles } from "./core/zip.js";
 
-const VERSION = "3.3.1";
+const VERSION = "3.4.0";
 // Proportions of the burned vertical video (identical in every pipeline calibration), in em of
 // the main subtitle text: line limit, frame width, and the height the three blocks need.
 const FIT_EM = 892.4 / 67.797, FRAME_EM = 1080 / 67.797, PANEL_EM = 14.4, CTX_SCALE = 74 / 93;
@@ -72,8 +72,9 @@ const S = {
 // Kept on this device for every lecture: speed (and each Dropbox folder's own, folderRates, by the
 // folder in lower case), the timing offset and whether it is on, the video/subtitle split for each
 // orientation, the highlight (its color, the soft setting and whether it is on), the last Play by tag
-// choice (tagPick) and sleep timer (sleepMin), and how dark the touch lock makes the screen (lockDim).
-// (Position, sync, language and fixes are kept per transcript in IndexedDB.)
+// choice (tagPick) and sleep timer (sleepMin), how dark the touch lock makes the screen (lockDim), and
+// after how many plays to the end a lecture leaves the list (hideAfter, 0: never). (Position, sync,
+// language and fixes are kept per transcript in IndexedDB.)
 // The key carries the app prefix: all Pages projects share one origin.
 const PREFS_KEY = "lecture-karaoke.prefs";
 // Highlight presets, readable on black; yellow is the burned videos' color.
@@ -82,7 +83,7 @@ const HI_COLORS = [["Yellow", "#ffe000"], ["Orange", "#fb923c"], ["Green", "#4ad
 // The soft highlight keeps this % of the color, the rest the white of the words to come.
 const HI_SOFT_RANGE = [20, 90], HI_SOFT_DEFAULT = 40;
 const prefs = { rate: 1, folderRates: {}, offsetMs: 3000, offsetOn: false, split: { portrait: null, landscape: null }, bar: null,
-  uploadFolder: "Uploads", hi: { color: HI_COLORS[0][1], soft: false, strength: HI_SOFT_DEFAULT }, lockDim: 0 };
+  uploadFolder: "Uploads", hi: { color: HI_COLORS[0][1], soft: false, strength: HI_SOFT_DEFAULT }, lockDim: 0, hideAfter: 0 };
 try {
   const saved = JSON.parse(localStorage.getItem(PREFS_KEY) || "{}");
   Object.assign(prefs, saved, { split: { ...prefs.split, ...saved.split } });
@@ -97,6 +98,7 @@ delete prefs.endMode;       // until 2.15.0 the end mode was kept; now leaving t
 delete prefs.lockButtons;   // 2.12.0 to 2.14.0's choice of lock screen buttons
 delete prefs.seamless;      // 2.13.0 to 2.15.0's second stream
 prefs.lockDim = clamp(Number(prefs.lockDim) || 0, 0, 1);
+prefs.hideAfter = clamp(Math.round(Number(prefs.hideAfter) || 0), 0, 99);
 prefs.offsetMs = Number.isFinite(Number(prefs.offsetMs)) ? clamp(Number(prefs.offsetMs), -OFFSET_MAX_MS, OFFSET_MAX_MS) : 3000;
 prefs.offsetOn = prefs.offsetOn === true;
 for (const o of ["portrait", "landscape"]) if (!Number.isFinite(prefs.split[o])) prefs.split[o] = null;
@@ -289,7 +291,7 @@ class SharedSet {
     }
   }
 }
-const library = { items: [], loading: null, opening: false, note: "", watchUntil: 0, view: "all",
+const library = { items: [], loading: null, opening: false, note: "", watchUntil: 0, view: "all", hideMode: false,
   hidden: new SharedSet(HIDDEN_FILE, hiddenHashes), played: new SharedSet(PLAYED_FILE, playedHashes),
   pinned: new SharedSet(PINNED_FILE, pinnedFolders), unimportant: new SharedSet(UNIMPORTANT_FILE, unimportantHashes),
   tags: new SharedSet(TAGS_FILE, folderTags) };
@@ -355,7 +357,7 @@ function drawLibrary() {
     : q && !items.length ? "Nothing matches."
     : hiddenView ? `${count} hidden from the list${busy ? `, ${busy} being transcribed` : ""}. They stay in Dropbox; select them to show them again.`
     : !n ? `All ${library.items.length} files are hidden from the list.`
-    : `${count}${busy ? `, ${busy} being transcribed` : ""}.`);
+    : `${count}${busy ? `, ${busy} being transcribed` : ""}.`) + (hiding() && n ? ` Tap the eye beside a file to ${hiddenView ? "show it again" : "hide it"}.` : "");
   const withTools = !picking.on && !hiddenView;
   $("libList").replaceChildren(...groups.map((g) => {
     const d = Object.assign(document.createElement("details"), { className: "lib-folder", open: !!q || groups.length === 1 || openFolders.has(g.folder) });
@@ -384,7 +386,8 @@ function drawLibrary() {
       b.addEventListener("click", () => (picking.on ? pick(it, b) : openFromDropbox(it)));
       const li = document.createElement("li");
       li.append(b);
-      if (withTools) li.append(importanceButton(it, !minor));
+      if (hiding()) li.append(hideButton(it, hiddenView));
+      else if (withTools) li.append(importanceButton(it, !minor));
       return li;
     }));
     d.append(summary);
@@ -425,6 +428,19 @@ const SHUFFLE_SVG = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7h3
 const DOWNLOAD_SVG = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v10.5M7.5 10 12 14.5 16.5 10M5 19.5h14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
 const LIST_SVG = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 6h12M3.5 11h8M3.5 16h6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M14.5 13v8l6.5-4z" fill="currentColor"/></svg>`;
 const PIN_SVG = `<svg viewBox="0 0 24 24" aria-hidden="true"><path class="pin-head" d="M9 3.5h6l-1 5.5 3.5 4h-11L10 9z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M12 13v7.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>`;
+const EYE_SVG = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12s3.6-6.5 9.5-6.5 9.5 6.5 9.5 6.5-3.6 6.5-9.5 6.5S2.5 12 2.5 12z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="2"/></svg>`;
+const EYE_OFF_SVG = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12s3.4-6 9-6c1.9 0 3.5.7 4.8 1.6M21 12s-3.4 6-9 6c-1.9 0-3.5-.7-4.8-1.6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M9.9 14.1a3 3 0 0 1 4.2-4.2M4 20 20 4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>`;
+/** Hide mode (the floating eye button of the start screen; not while selecting files). */
+const hiding = () => library.hideMode && !picking.on;
+/** Hide mode's button beside a file: off the list at once, or among the hidden ones back on it, with
+ *  Undo for 3 s. */
+function hideButton(it, back) {
+  const name = it.name.replace(/\.[^.]+$/, ""), says = back ? `Show “${name}” in the list again` : `Hide “${name}” from the list`;
+  const b = el("button", { type: "button", className: "lib-star lib-hide", innerHTML: back ? EYE_SVG : EYE_OFF_SVG, title: says });
+  b.setAttribute("aria-label", says);
+  b.addEventListener("click", () => setHidden([it], !back, { undoMs: 3000 }));
+  return b;
+}
 const STAR_SVG = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.8l2.5 5.2 5.7.8-4.1 4 1 5.7-5.1-2.7-5.1 2.7 1-5.7-4.1-4 5.7-.8z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>`;
 
 /** A lecture's star: lit while it is important (as lectures are at first); a tap switches it. */
@@ -751,9 +767,17 @@ function drawPick() {
   $("libPicked").textContent = picking.busy || (n ? `${n} selected` : `Tap the files to ${hiddenView ? "unhide" : "hide"} or delete.`);
   $("libHide").textContent = hiddenView ? "Unhide" : "Hide";
   $("libHide").disabled = $("libDelete").disabled = !n || !!picking.busy;
+  $("hideFab").hidden = picking.on || !library.items.length;
+  $("hideFab").setAttribute("aria-pressed", String(library.hideMode));
 }
+$("hideFab").addEventListener("click", () => {
+  library.hideMode = !library.hideMode;
+  drawLibrary();
+});
+$("libSettings").addEventListener("click", openSettings);
 $("libSelect").addEventListener("click", () => {
   picking.on = !picking.on;
+  library.hideMode = false;
   picking.paths.clear();
   drawLibrary();
 });
@@ -766,17 +790,21 @@ $("libHide").addEventListener("click", () => {
   if (items.length) setHidden(items, library.view !== "hidden");
 });
 /** Takes these files off the list (hide) or puts them back, on every device: hidden.json in the
- *  repository. They stay in Dropbox. The toast's Undo reverses it. */
-async function setHidden(items, hide) {
+ *  repository. They stay in Dropbox. The toast's Undo (for undoMs) reverses it, offered at once: the
+ *  list shows the change before GitHub has it. A file put back has its plays to the end counted
+ *  afresh (countFinished). */
+async function setHidden(items, hide, { undoMs = 5000, says = "" } = {}) {
   const n = items.length, what = n === 1 ? `“${items[0].name}”` : `${n} files`;
   const done = library.hidden.write(items.map((it) => it.hash), hide, (cur) => withHidden(cur, items, hide),
     `${hide ? "Hide" : "Unhide"} ${n === 1 ? items[0].name : `${n} files`} in the app's list`);
+  if (!hide) forgetFinished(items);
   picking.on = false;
   picking.paths.clear();
   drawLibrary();
+  toast(says || (hide ? `Hid ${what} from the list.` : `${what} ${n === 1 ? "is" : "are"} back in the list.`), "Undo",
+    () => setHidden(items, !hide, { undoMs }), undoMs);
   try {
     await done;
-    toast(hide ? `Hid ${what} from the list.` : `${what} ${n === 1 ? "is" : "are"} back in the list.`, "Undo", () => setHidden(items, !hide));
   } catch (err) {
     toast(`Couldn't ${hide ? "hide" : "unhide"} ${what}: ${err.message}`);
   } finally {
@@ -2728,12 +2756,35 @@ function nextAfter(now) {
  *  one's name and length show at once, and it opens from its start (fetched ahead: readyNext). */
 function lectureEnded() {
   S.playing = false;
-  const now = endMode !== "stay" && !document.hidden && ensureScope() && openItem();
-  if (!now) return;
-  const it = nextAfter(now);
-  if (!it) return toast(endMode === "next" ? `That was the last lecture ${scopeName()}.` : `Every lecture ${scopeName()} has played.`);
+  const ended = ensureScope() && openItem(), now = endMode !== "stay" && !document.hidden && ended;
+  const it = now && nextAfter(now);   // before the one that ended may leave the list
+  if (now && !it) toast(endMode === "next" ? `That was the last lecture ${scopeName()}.` : `Every lecture ${scopeName()} has played.`);
+  if (ended) countFinished(ended);
+  if (!it) return;
   showComing(it);
   playItem(it, scope, { fromStart: true });
+}
+// Plays to the end, counted on this device by file (Dropbox's content hash): Settings → Hiding files
+// hides a lecture once it has played to the end that many times (prefs.hideAfter; 0: never).
+const FINISHED_KEY = "lecture-karaoke.finished";
+function finishedCounts() {
+  try { return JSON.parse(localStorage.getItem(FINISHED_KEY) || "{}") || {}; } catch { return {}; }
+}
+function keepFinished(counts) {
+  try { localStorage.setItem(FINISHED_KEY, JSON.stringify(counts)); } catch { /* not kept */ }
+}
+function countFinished(it) {
+  const counts = finishedCounts(), n = (counts[it.hash] || 0) + 1;
+  counts[it.hash] = n;
+  keepFinished(counts);
+  if (prefs.hideAfter && n >= prefs.hideAfter && !library.hidden.has(it.hash)) {
+    setHidden([it], true, { undoMs: 3000, says: `Hid “${lectureTitle(it)}”: played to the end ${n === 1 ? "once" : `${n} times`}.` });
+  }
+}
+function forgetFinished(items) {
+  const counts = finishedCounts();
+  for (const it of items) delete counts[it.hash];
+  keepFinished(counts);
 }
 /** As the next lecture opens, before anything about it is fetched: its name and length (the index's)
  *  in the bar, the window's title and on the lock screen, and the subtitles of the one before give way
@@ -3015,9 +3066,15 @@ function openSettings() {
   drawFixList();
   drawTranscriptLinks();
   drawThisLecture();
+  $("hideAfter").value = String(prefs.hideAfter);
+  $("settings").classList.toggle("no-lecture", player.hidden);   // from the start screen
   $("settings").showModal();
   renderGet();
 }
+$("hideAfter").addEventListener("change", () => {
+  prefs.hideAfter = Number($("hideAfter").value) || 0;
+  savePrefs();
+});
 $("settings").addEventListener("close", drawLive);
 function syncSplitControls() {
   const o = orient(), [lo, hi] = SPLIT_RANGE[o], share = videoShare();
@@ -3215,7 +3272,7 @@ async function keepAwake(on) {
   } catch { /* not allowed here: fine */ }
 }
 
-function toast(text, actionLabel, action) {
+function toast(text, actionLabel, action, ms = 5000) {
   const t = $("toast");
   t.replaceChildren(text);
   if (actionLabel) {
@@ -3225,7 +3282,7 @@ function toast(text, actionLabel, action) {
   }
   t.hidden = false;
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => (t.hidden = true), 5000);
+  toastTimer = setTimeout(() => (t.hidden = true), ms);
 }
 
 // ---------------------------------------------------------------- start-up

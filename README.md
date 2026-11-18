@@ -173,7 +173,12 @@ Language; a language chosen there stays with that transcript).
 *Select* hides files from the list or deletes them from Dropbox: tap the files, then **Hide** or
 **Delete**. A hidden file stays in Dropbox and leaves the list on every device (`hidden.json` in the
 repository); *Undo* in the message puts it back. **Hidden (N)** in the header lists the hidden
-files, where *Select* and **Unhide** show them again. **Delete** asks first. Dropbox keeps
+files, where *Select* and **Unhide** show them again. The round eye button at the bottom right
+turns on hide mode: an eye beside each file (in place of its star) takes that file off the list at
+once, with *Undo* for 3 seconds; among the hidden files it puts one back. ⋯ Settings → *Hiding
+files* can also hide a lecture by itself once it has played to the end a number of times (never, at
+first; counted on this device; a file put back is counted afresh). *Settings* in the header opens the
+settings from the start screen (the parts about a lecture that's open are left out there). **Delete** asks first. Dropbox keeps
 deleted files for at least 30 days (restore them from *Deleted files* on dropbox.com). Their
 transcripts stay in the repository, so a file put back finds its transcript again, and a deleted
 file leaves the recent list too. A file still being transcribed can be deleted, but that

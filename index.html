@@ -7,7 +7,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Karaoke">
-<meta name="app-version" content="3.3.1">
+<meta name="app-version" content="3.4.0">
 <meta name="description" content="Plays your lecture videos and audio recordings, from your device or your Dropbox, with live karaoke subtitles from their Soniox transcripts; new ones get transcribed on GitHub.">
 <title>Lecture Karaoke</title>
 <link rel="manifest" href="manifest.webmanifest">
@@ -49,6 +49,7 @@
         <button type="button" id="libCheck" class="linkish" title="Get the list from Dropbox again, and start the transcription job now for files added there (it also runs on a schedule)">Check now</button>
         <button type="button" id="libSelect" class="linkish" title="Choose files to hide from this list or delete from Dropbox">Select</button>
         <button type="button" id="libHidden" class="linkish" title="The files hidden from this list (they stay in Dropbox)" hidden>Hidden</button>
+        <button type="button" id="libSettings" class="linkish" title="Settings">Settings</button>
       </span>
     </div>
     <button type="button" id="tagPlayBtn" class="tag-play-btn"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 12.2V4.5a1 1 0 0 1 1-1h7.7l8.3 8.3a1.5 1.5 0 0 1 0 2.1l-6.1 6.1a1.5 1.5 0 0 1-2.1 0z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><circle cx="8" cy="8" r="1.7" fill="currentColor"/></svg>Play by tag</button>
@@ -62,6 +63,8 @@
       <button type="button" id="libHide" disabled>Hide</button>
       <button type="button" id="libDelete" class="danger" disabled>Delete</button>
     </div>
+    <!-- Hide mode (app.js hideButton): an eye beside each file takes it off the list at once, with Undo. -->
+    <button type="button" id="hideFab" class="fab" aria-pressed="false" title="Hide files: an eye beside each file takes it off the list" aria-label="Hide files" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12s3.4-6 9-6c1.9 0 3.5.7 4.8 1.6M21 12s-3.4 6-9 6c-1.9 0-3.5-.7-4.8-1.6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M9.9 14.1a3 3 0 0 1 4.2-4.2M4 20 20 4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button>
   </section>
   <p class="foot"><button type="button" id="ghLine" class="linkish">Connect GitHub</button> · <a href="playback-test.html">Playback test</a> · <span id="version"></span></p>
 </main>
@@ -174,15 +177,24 @@
 <dialog id="settings">
   <form method="dialog">
     <h2>Settings</h2>
-    <fieldset id="thisSet" hidden>
+    <fieldset id="thisSet" class="lecture-only" hidden>
       <legend>This lecture</legend>
       <label class="check"><input type="checkbox" id="thisImportant"> Important</label>
       <p class="small">Play by tag leaves out the lectures that aren't important. Kept on GitHub, for all your devices; the star in the bar and beside each lecture in the list do the same.</p>
     </fieldset>
-    <fieldset id="txSet">
+    <fieldset id="txSet" class="lecture-only">
       <legend>Transcript</legend>
       <p class="tx-links"><a id="txText" href="#" download>Plain text (.txt)</a><a id="txJson" href="#" download>JSON (.json)</a></p>
       <p class="small" id="txNote">This lecture's transcript with your word fixes: one sentence per line, or all of it with word timings.</p>
+    </fieldset>
+    <fieldset>
+      <legend>Hiding files</legend>
+      <label for="hideAfter" class="small top">Hide a lecture from the list once it has played to the end:</label>
+      <select id="hideAfter">
+        <option value="0">Never</option><option value="1">1 time</option><option value="2">2 times</option><option value="3">3 times</option>
+        <option value="4">4 times</option><option value="5">5 times</option><option value="10">10 times</option>
+      </select>
+      <p class="small">Counted on this device. A hidden file stays in Dropbox: <b>Hidden</b> above the list shows it again. In the list, the eye button at the bottom turns on hide mode: an eye beside each file hides it at once.</p>
     </fieldset>
     <fieldset>
       <legend>Subtitle timing</legend>
@@ -195,13 +207,13 @@
       </div>
       <p class="small" id="offsetSays"></p>
     </fieldset>
-    <fieldset>
+    <fieldset class="lecture-only">
       <legend>Sync fine-tune: <output id="syncOut">0 ms</output></legend>
       <input type="range" id="sync" min="-300" max="300" step="10" value="0">
       <p class="small">Moves every subtitle earlier (−) or later (+), if they look early or late on this device.
         <span id="offsetInfo"></span></p>
     </fieldset>
-    <fieldset>
+    <fieldset class="lecture-only">
       <legend>Layout</legend>
       <div class="row"><label for="split" id="splitLabel">Video area</label><output id="splitOut"></output></div>
       <input type="range" id="split" min="15" max="85" step="1">
@@ -223,12 +235,12 @@
       <p class="small">The <b>Soft</b> button in the bar switches between the two (key H).</p>
     </fieldset>
     <input type="checkbox" id="autoNext" hidden>   <!-- 2.9.0's "Next lecture" setting; its scripts look it up at start -->
-    <fieldset>
+    <fieldset class="lecture-only">
       <legend>Control bar</legend>
       <button type="button" id="arrangeBtn">Arrange the buttons</button>
       <p class="small">Move buttons between the two rows, reorder them or hide them. Kept on this device.</p>
     </fieldset>
-    <fieldset>
+    <fieldset class="lecture-only">
       <legend>Language</legend>
       <select id="language"><option value="en">English</option><option value="vi">Tiếng Việt</option></select>
       <p class="small">Used to choose natural places to split long sentences. A lecture in a Dropbox folder whose name ends in ___vn starts in Tiếng Việt.</p>
@@ -238,18 +250,18 @@
       <p id="ghNote" class="small top"></p>
       <button type="button" id="ghOpen">GitHub settings</button>
     </fieldset>
-    <fieldset id="dbxSet" hidden>
+    <fieldset id="dbxSet" class="lecture-only" hidden>
       <legend>Dropbox</legend>
       <div id="dbxBox" class="get"></div>
     </fieldset>
-    <fieldset>
+    <fieldset class="lecture-only">
       <legend>Word fixes</legend>
       <ul id="fixList" class="fix-list"></ul>
       <button type="button" id="exportBtn">Export corrected transcript</button>
       <p class="small">Saves a corrected .json (open it here next time) and a transcript.txt for the vertical_video_maker pipeline.</p>
     </fieldset>
     <div class="dialog-buttons">
-      <button type="button" id="openOther">Start screen</button>
+      <button type="button" id="openOther" class="lecture-only">Start screen</button>
       <button value="close" class="primary">Done</button>
     </div>
   </form>

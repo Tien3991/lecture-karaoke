@@ -85,6 +85,16 @@ body.dragging .welcome { outline: 3px dashed var(--hi); outline-offset: -10px; }
 .lib-star svg { width: 20px; height: 20px; }
 .lib-star[aria-pressed="true"] { color: #5c5c5c; }
 .lib-star[aria-pressed="true"] path { fill: currentColor; }
+/* hide mode: the floating button (bottom right of the start screen, lit while on) and the eye beside each file */
+.fab { position: fixed; right: calc(16px + env(safe-area-inset-right)); bottom: calc(16px + env(safe-area-inset-bottom)); z-index: 5;
+  width: 52px; height: 52px; padding: 0; display: grid; place-items: center; border-radius: 50%; border: 1px solid #444;
+  background: #222; color: var(--fg); box-shadow: 0 6px 20px rgba(0, 0, 0, 0.6); }
+.fab[hidden] { display: none; }
+.fab svg { width: 24px; height: 24px; }
+.fab[aria-pressed="true"] { background: var(--hi); color: #000; border-color: var(--hi); }
+.lib-hide { color: var(--hi); }
+.library:has(.fab:not([hidden])) { padding-bottom: 64px; }   /* the last file isn't under the button */
+#settings.no-lecture .lecture-only { display: none; }   /* opened from the start screen */
 .tag-play-btn { display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%; margin: 0 0 8px; padding: 11px 14px; font-weight: 600; }
 .tag-play-btn svg { width: 20px; height: 20px; flex: none; }
 .lib-items { list-style: none; margin: 0; padding: 0 6px 6px; display: grid; gap: 4px; }
