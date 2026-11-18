@@ -176,8 +176,10 @@ repository); *Undo* in the message puts it back. **Hidden (N)** in the header li
 files, where *Select* and **Unhide** show them again. The round eye button at the bottom right
 turns on hide mode: an eye beside each file (in place of its star) takes that file off the list at
 once, with *Undo* for 3 seconds; among the hidden files it puts one back. ⋯ Settings → *Hiding
-files* can also hide a lecture by itself once it has played to the end a number of times (never, at
-first; counted on this device; a file put back is counted afresh). *Settings* in the header opens the
+files* can also hide a lecture by itself once it has played to the end a number of times in the
+last so many days (never, at first; 7 days unless changed; or at any time). Plays to the end are
+counted on this device, each with its date (the last 20 per file); it only ever hides, exactly as by
+hand, so a file hidden by hand stays hidden, and a file put back is counted afresh. *Settings* in the header opens the
 settings from the start screen (the parts about a lecture that's open are left out there). **Delete** asks first. Dropbox keeps
 deleted files for at least 30 days (restore them from *Deleted files* on dropbox.com). Their
 transcripts stay in the repository, so a file put back finds its transcript again, and a deleted

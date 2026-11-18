@@ -22,7 +22,7 @@ import { applyNoteChanges, newNoteId, noteStamp, shownNotes } from "./core/notes
 import * as store from "./core/store.js";
 import { zipFiles } from "./core/zip.js";
 
-const VERSION = "3.4.0";
+const VERSION = "3.5.0";
 // Proportions of the burned vertical video (identical in every pipeline calibration), in em of
 // the main subtitle text: line limit, frame width, and the height the three blocks need.
 const FIT_EM = 892.4 / 67.797, FRAME_EM = 1080 / 67.797, PANEL_EM = 14.4, CTX_SCALE = 74 / 93;
@@ -73,8 +73,8 @@ const S = {
 // folder in lower case), the timing offset and whether it is on, the video/subtitle split for each
 // orientation, the highlight (its color, the soft setting and whether it is on), the last Play by tag
 // choice (tagPick) and sleep timer (sleepMin), how dark the touch lock makes the screen (lockDim), and
-// after how many plays to the end a lecture leaves the list (hideAfter, 0: never). (Position, sync,
-// language and fixes are kept per transcript in IndexedDB.)
+// after how many plays to the end (hideAfter, 0: never) in how many days (hideWithin, 0: at any time) a
+// lecture leaves the list. (Position, sync, language and fixes are kept per transcript in IndexedDB.)
 // The key carries the app prefix: all Pages projects share one origin.
 const PREFS_KEY = "lecture-karaoke.prefs";
 // Highlight presets, readable on black; yellow is the burned videos' color.
@@ -83,7 +83,7 @@ const HI_COLORS = [["Yellow", "#ffe000"], ["Orange", "#fb923c"], ["Green", "#4ad
 // The soft highlight keeps this % of the color, the rest the white of the words to come.
 const HI_SOFT_RANGE = [20, 90], HI_SOFT_DEFAULT = 40;
 const prefs = { rate: 1, folderRates: {}, offsetMs: 3000, offsetOn: false, split: { portrait: null, landscape: null }, bar: null,
-  uploadFolder: "Uploads", hi: { color: HI_COLORS[0][1], soft: false, strength: HI_SOFT_DEFAULT }, lockDim: 0, hideAfter: 0 };
+  uploadFolder: "Uploads", hi: { color: HI_COLORS[0][1], soft: false, strength: HI_SOFT_DEFAULT }, lockDim: 0, hideAfter: 0, hideWithin: 7 };
 try {
   const saved = JSON.parse(localStorage.getItem(PREFS_KEY) || "{}");
   Object.assign(prefs, saved, { split: { ...prefs.split, ...saved.split } });
@@ -99,6 +99,7 @@ delete prefs.lockButtons;   // 2.12.0 to 2.14.0's choice of lock screen buttons
 delete prefs.seamless;      // 2.13.0 to 2.15.0's second stream
 prefs.lockDim = clamp(Number(prefs.lockDim) || 0, 0, 1);
 prefs.hideAfter = clamp(Math.round(Number(prefs.hideAfter) || 0), 0, 99);
+prefs.hideWithin = Number.isFinite(Number(prefs.hideWithin)) ? clamp(Math.round(Number(prefs.hideWithin)), 0, 365) : 7;
 prefs.offsetMs = Number.isFinite(Number(prefs.offsetMs)) ? clamp(Number(prefs.offsetMs), -OFFSET_MAX_MS, OFFSET_MAX_MS) : 3000;
 prefs.offsetOn = prefs.offsetOn === true;
 for (const o of ["portrait", "landscape"]) if (!Number.isFinite(prefs.split[o])) prefs.split[o] = null;
@@ -2764,27 +2765,32 @@ function lectureEnded() {
   showComing(it);
   playItem(it, scope, { fromStart: true });
 }
-// Plays to the end, counted on this device by file (Dropbox's content hash): Settings → Hiding files
-// hides a lecture once it has played to the end that many times (prefs.hideAfter; 0: never).
-const FINISHED_KEY = "lecture-karaoke.finished";
-function finishedCounts() {
-  try { return JSON.parse(localStorage.getItem(FINISHED_KEY) || "{}") || {}; } catch { return {}; }
+// Plays to the end, kept on this device by file (Dropbox's content hash) with when each was, the last
+// 20: Settings → Hiding files hides a lecture once it has played to the end prefs.hideAfter times (0:
+// never) in the last prefs.hideWithin days (0: at any time). Only ever hides; a file put back starts
+// afresh. (3.4.0 kept counts without dates: they are dropped.)
+const PLAYED_TO_END_KEY = "lecture-karaoke.playedToEnd", DAY_MS = 86400000;
+try { localStorage.removeItem("lecture-karaoke.finished"); } catch { /* none */ }
+function playsToEnd() {
+  try { return JSON.parse(localStorage.getItem(PLAYED_TO_END_KEY) || "{}") || {}; } catch { return {}; }
 }
-function keepFinished(counts) {
-  try { localStorage.setItem(FINISHED_KEY, JSON.stringify(counts)); } catch { /* not kept */ }
+function keepPlaysToEnd(plays) {
+  try { localStorage.setItem(PLAYED_TO_END_KEY, JSON.stringify(plays)); } catch { /* not kept */ }
 }
 function countFinished(it) {
-  const counts = finishedCounts(), n = (counts[it.hash] || 0) + 1;
-  counts[it.hash] = n;
-  keepFinished(counts);
+  const plays = playsToEnd(), now = Date.now(), times = [...(plays[it.hash] || []), now].slice(-20);
+  plays[it.hash] = times;
+  keepPlaysToEnd(plays);
+  const days = prefs.hideWithin, n = days ? times.filter((t) => now - t < days * DAY_MS).length : times.length;
   if (prefs.hideAfter && n >= prefs.hideAfter && !library.hidden.has(it.hash)) {
-    setHidden([it], true, { undoMs: 3000, says: `Hid “${lectureTitle(it)}”: played to the end ${n === 1 ? "once" : `${n} times`}.` });
+    const when = days ? ` in the last ${days === 1 ? "day" : `${days} days`}` : "";
+    setHidden([it], true, { undoMs: 3000, says: `Hid “${lectureTitle(it)}”: played to the end ${n === 1 ? "once" : `${n} times`}${when}.` });
   }
 }
 function forgetFinished(items) {
-  const counts = finishedCounts();
-  for (const it of items) delete counts[it.hash];
-  keepFinished(counts);
+  const plays = playsToEnd();
+  for (const it of items) delete plays[it.hash];
+  keepPlaysToEnd(plays);
 }
 /** As the next lecture opens, before anything about it is fetched: its name and length (the index's)
  *  in the bar, the window's title and on the lock screen, and the subtitles of the one before give way
@@ -3067,12 +3073,19 @@ function openSettings() {
   drawTranscriptLinks();
   drawThisLecture();
   $("hideAfter").value = String(prefs.hideAfter);
+  $("hideWithin").value = String(prefs.hideWithin);
+  $("hideWithin").disabled = !prefs.hideAfter;
   $("settings").classList.toggle("no-lecture", player.hidden);   // from the start screen
   $("settings").showModal();
   renderGet();
 }
 $("hideAfter").addEventListener("change", () => {
   prefs.hideAfter = Number($("hideAfter").value) || 0;
+  $("hideWithin").disabled = !prefs.hideAfter;
+  savePrefs();
+});
+$("hideWithin").addEventListener("change", () => {
+  prefs.hideWithin = Number($("hideWithin").value) || 0;
   savePrefs();
 });
 $("settings").addEventListener("close", drawLive);

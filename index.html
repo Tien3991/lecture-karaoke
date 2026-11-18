@@ -7,7 +7,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Karaoke">
-<meta name="app-version" content="3.4.0">
+<meta name="app-version" content="3.5.0">
 <meta name="description" content="Plays your lecture videos and audio recordings, from your device or your Dropbox, with live karaoke subtitles from their Soniox transcripts; new ones get transcribed on GitHub.">
 <title>Lecture Karaoke</title>
 <link rel="manifest" href="manifest.webmanifest">
@@ -189,12 +189,19 @@
     </fieldset>
     <fieldset>
       <legend>Hiding files</legend>
-      <label for="hideAfter" class="small top">Hide a lecture from the list once it has played to the end:</label>
-      <select id="hideAfter">
-        <option value="0">Never</option><option value="1">1 time</option><option value="2">2 times</option><option value="3">3 times</option>
-        <option value="4">4 times</option><option value="5">5 times</option><option value="10">10 times</option>
-      </select>
-      <p class="small">Counted on this device. A hidden file stays in Dropbox: <b>Hidden</b> above the list shows it again. In the list, the eye button at the bottom turns on hide mode: an eye beside each file hides it at once.</p>
+      <p class="small top">Hide a lecture from the list once it has played to the end</p>
+      <div class="hide-rule">
+        <select id="hideAfter" aria-label="How many times">
+          <option value="0">Never</option><option value="1">once</option><option value="2">2 times</option><option value="3">3 times</option>
+          <option value="4">4 times</option><option value="5">5 times</option><option value="10">10 times</option>
+        </select>
+        <select id="hideWithin" aria-label="In how many days">
+          <option value="1">in the last day</option><option value="3">in the last 3 days</option><option value="7">in the last 7 days</option>
+          <option value="14">in the last 14 days</option><option value="30">in the last 30 days</option><option value="90">in the last 90 days</option>
+          <option value="0">at any time</option>
+        </select>
+      </div>
+      <p class="small">Counted on this device. It only hides, the same way as by hand: a hidden file stays in Dropbox, and <b>Hidden</b> above the list shows it again (then it is counted afresh). In the list, the eye button at the bottom turns on hide mode: an eye beside each file hides it at once.</p>
     </fieldset>
     <fieldset>
       <legend>Subtitle timing</legend>

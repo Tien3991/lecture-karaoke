@@ -95,6 +95,8 @@ body.dragging .welcome { outline: 3px dashed var(--hi); outline-offset: -10px; }
 .lib-hide { color: var(--hi); }
 .library:has(.fab:not([hidden])) { padding-bottom: 64px; }   /* the last file isn't under the button */
 #settings.no-lecture .lecture-only { display: none; }   /* opened from the start screen */
+.hide-rule { display: flex; flex-wrap: wrap; gap: 8px; }   /* Settings → Hiding files: how many times, in how many days */
+.hide-rule select { width: auto; flex: 1 1 auto; }
 .tag-play-btn { display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%; margin: 0 0 8px; padding: 11px 14px; font-weight: 600; }
 .tag-play-btn svg { width: 20px; height: 20px; flex: none; }
 .lib-items { list-style: none; margin: 0; padding: 0 6px 6px; display: grid; gap: 4px; }
