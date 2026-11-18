@@ -36,8 +36,8 @@ app the video takes over from where the sound is. The sound stops for a moment a
 phone has stopped the video before the app hears of it, and the audio player then fetches the sound
 from that moment. While the audio player plays, the video is muted as well as paused, so that the lock
 screen follows the audio player (it would show the paused video's ▶ otherwise). That is all: a lecture
-that ends with the screen locked just ends (the end mode acts in the app), and a recording plays on
-by itself. (2.13.0 to 2.15.0 could also stream the lecture a second time while you watched, and
+that ends with the screen locked just ends (the end mode acts in the app; back in the app, the next
+one is in its place, paused), and a recording plays on by itself. (2.13.0 to 2.15.0 could also stream the lecture a second time while you watched, and
 started the next lecture on the lock screen; that worked only some of the time, so 3.0.0 does
 neither.) After the app opens, it takes one tap on play or on a lecture (a phone lets sound start
 only from a tap). Some iOS versions have had bugs with web audio in the background (17.0 to 17.4,
@@ -47,8 +47,8 @@ The three most recent lectures are listed under the pickers with where you stopp
 streams again; for a file on the device a browser can't reopen it by itself, so tapping one opens
 the file picker (its Recents has the video).
 
-The control bar has two rows: by default the lecture's file name (on a line of its own), the progress
-bar (on a phone held upright, on a line of its own too), **Soft**, **Exact**, notes, **Fix**, the lock,
+The control bar has two rows: by default the lecture's file name (on a line of its own, with the hide
+button at its end), the progress bar (on a phone held upright, on a line of its own too), **Soft**, **Exact**, notes, **Fix**, the lock,
 the star, the end mode, the sleep timer, full screen and ⋯ on top, and back, previous lecture, −5s,
 play, +5s, next lecture and the speed below. ⋯ Settings → *Arrange the buttons* lets you move any button left or right or to
 the other row, or hide it (tap a button, then move it); the arrangement is kept on the device. A
@@ -67,9 +67,10 @@ button added in a later release appears where the default bar has it.
 | lock | lock the screen against touches while the lecture plays: nothing under it reacts, and the bar dims. A touch shows *Slide to unlock*: slide the lock all the way to the right and let go there (stopping short, or wandering off the track, leaves it locked). Above it, the dimmer lays black over the screen: a swipe along it to the left darkens it, all the way to black, and to the right lightens it again (the knob moves as far as the finger; a tap changes nothing; kept on the device for the next lock; it never unlocks). The keyboard still works; on the lock's slider, → moves it a quarter at a time, and on the dimmer ←/→ darken or lighten it a tenth |
 | `Fix` | tap a word to correct it (synced through GitHub when connected) |
 | notes (page icon) | notes on the lecture, below |
+| hide (crossed-out eye, beside the file name) | takes the lecture off the library's list, on every device (`hidden.json`), as hide mode's eye does there, with *Undo* for 3 seconds; it plays on, and ⏮/⏭ go on from it. Lit while the lecture is off the list; a tap puts it back. For lectures in the Dropbox library |
 | star | whether the lecture is important: filled while it is (as every lecture is at first), an outline while it isn't; a tap switches it, on every device (`unimportant.json`). *Play by tag* leaves out the lectures that aren't important. For lectures in the Dropbox library |
 | `⋯` | settings: links to the transcript, timing offset, sync fine-tune (±300 ms), layout, highlight, control bar, GitHub, language, the list of fixes, export |
-| end mode | what happens when a lecture ends in the app; each tap goes to the next of three, and the icon shows which (no message): stop after this lecture (→\|); the next lecture, up to the last one (list icon, in the highlight color); a random lecture, until each has played once (crossed arrows, in the highlight color). Leaving the player sets it back to stop. See below |
+| end mode | what happens when a lecture ends in the app; each tap goes to the next of three, and the icon shows which (no message): stop, with the next lecture put in place, paused (→\|); the next lecture, up to the last one (list icon, in the highlight color); a random lecture, until each has played once (crossed arrows, in the highlight color). Leaving the player sets it back to stop. See below |
 | sleep (moon) | sleep timer: playback pauses after the minutes chosen (a preset, or type them); lit while it runs (no message), and the dialog says how long is left |
 | `⛶` | full screen, where the browser allows it (not iPhone) |
 | handle between video and subtitles | drag to resize them; portrait and landscape are kept separately (double-click, or ⋯ Settings → Automatic, to reset) |
@@ -85,20 +86,26 @@ without one, or a file not in Dropbox, at the speed chosen last anywhere).
 **When a lecture ends.** A lecture from Dropbox plays among its folder's (in the library's order;
 hidden files are passed over), or among the list *Play by tag* made. The end mode button in the bar
 says what happens when it ends in the app; each tap goes to the next of three:
-- stop (an arrow to a bar): playback stops at the end of the lecture;
+- stop (an arrow to a bar): playback stops at the end of the lecture, and the next one is put in its
+  place, paused at its beginning, so that play starts it (at the last one of the folder or the list it
+  stays where it is, and says so);
 - in order (a list with a play sign, in the highlight color chosen in ⋯ Settings): lecture after
   lecture, up to the last one of the folder or the list;
 - shuffle (crossed arrows, in the highlight color): a random one (those with a transcript first),
   until each has played once.
 
-The next lecture starts right away, from its beginning: its name and length show at once, with a
-line saying it loads, and it plays after a moment, once its video has loaded. 30 seconds before the
-end the app fetches its Dropbox link and its transcript, so that it opens quickly. (3.1.0 to 3.3.0
-also played its sound ahead while the video caught up; on iPhone the picture stayed blank until
-paused and played again, so it loads like any other lecture now.) Leaving the player (‹) sets the button back to stop, so each
-lecture opened starts with it there; *Play by tag* sets it to in order or shuffle for its list. With
-the screen locked a lecture just ends. ⏮ and ⏭ go through the same folder or list in order, whatever
-the mode.
+The next lecture comes right away, from its beginning: its name and length show at once, with a
+line saying it loads, and it opens after a moment (and plays, unless the mode is stop), once its video
+has loaded. Play tapped meanwhile is for it (the button shows ❚❚ if it will play): it never starts
+the lecture that just ended again. As soon as a lecture plays (or 3 seconds after it opened), the
+app fetches the Dropbox link and the transcript of the next one in the folder or list, and 30 seconds
+before the end those of a shuffle's pick, so that ⏭ and the end mode open the next one at once; only
+its video still has to load. (3.1.0 to 3.3.0 also played its sound ahead while the video caught up;
+on iPhone the picture stayed blank until paused and played again, so it loads like any other lecture
+now.) Leaving the player (‹) sets the button back to stop, so each lecture opened starts with it
+there; *Play by tag* sets it to in order or shuffle for its list. With the screen locked a lecture
+just ends; back in the app, the next one is put in its place, paused, whatever the mode. ⏮ and ⏭ go
+through the same folder or list in order, whatever the mode.
 
 **Notes.** The notes button (or `N`) opens a layer over the video and subtitles, which show through
 it; the bar still works. Type a note in the box and press Enter (Shift+Enter starts a new line): it
@@ -175,7 +182,8 @@ Language; a language chosen there stays with that transcript).
 repository); *Undo* in the message puts it back. **Hidden (N)** in the header lists the hidden
 files, where *Select* and **Unhide** show them again. The round eye button at the bottom right
 turns on hide mode: an eye beside each file (in place of its star) takes that file off the list at
-once, with *Undo* for 3 seconds; among the hidden files it puts one back. ⋯ Settings → *Hiding
+once, with *Undo* for 3 seconds; among the hidden files it puts one back. The hide button beside
+the file name in the player does the same for the lecture open. ⋯ Settings → *Hiding
 files* can also hide a lecture by itself once it has played to the end a number of times in the
 last so many days (never, at first; 7 days unless changed; or at any time). Plays to the end are
 counted on this device, each with its date (the last 20 per file); it only ever hides, exactly as by

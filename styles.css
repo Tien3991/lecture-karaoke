@@ -216,6 +216,11 @@ body.dragging .welcome { outline: 3px dashed var(--hi); outline-offset: -10px; }
 .bar .icon.star[aria-pressed="false"] { color: var(--dim); }
 .bar-title { flex: 1 1 100%; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; text-align: center;
   font-size: 13px; color: var(--dim); }
+/* the hide button beside the file name (where the bar has it at first): the name leaves it room on its
+   line, and it stays small, so that the line stays low */
+.bar-title:has(+ .hide) { flex-basis: calc(100% - 56px); }
+.bar .bar-title + .hide { min-width: 40px; padding: 3px 8px; }
+.bar .bar-title + .hide svg { width: 16px; height: 16px; }
 .progress { flex: 1 1 160px; display: flex; align-items: center; gap: 8px; min-width: 0; }
 .progress input[type=range] { flex: 1; min-width: 60px; accent-color: var(--hi); }
 .time { font-variant-numeric: tabular-nums; font-size: 13px; color: var(--dim); white-space: nowrap; }

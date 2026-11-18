@@ -22,7 +22,7 @@ import { applyNoteChanges, newNoteId, noteStamp, shownNotes } from "./core/notes
 import * as store from "./core/store.js";
 import { zipFiles } from "./core/zip.js";
 
-const VERSION = "3.5.0";
+const VERSION = "3.6.0";
 // Proportions of the burned vertical video (identical in every pipeline calibration), in em of
 // the main subtitle text: line limit, frame width, and the height the three blocks need.
 const FIT_EM = 892.4 / 67.797, FRAME_EM = 1080 / 67.797, PANEL_EM = 14.4, CTX_SCALE = 74 / 93;
@@ -422,7 +422,8 @@ function drawLibrary() {
     return group;
   }));
   drawPick();
-  drawThisLecture();   // the bar's star, once the list knows the lecture
+  if (player.hidden) drawThisLecture();
+  else drawSteps();   // ⏮/⏭ and the bar's star and hide button, once the list knows the lecture
 }
 $("libSearch").addEventListener("input", drawLibrary);
 const SHUFFLE_SVG = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7h3.2c2 0 3.1 1 4.1 2.6l2.6 4.8c1 1.6 2.1 2.6 4.1 2.6H20M3 17h3.2c1.3 0 2.2-.4 3-1.2M14.2 8.2c.8-.8 1.7-1.2 3-1.2H20M17.5 4.5 20 7l-2.5 2.5M17.5 14.5 20 17l-2.5 2.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
@@ -910,16 +911,20 @@ async function dropboxMediaInfo(it) {
 /** Streams a library video, which plays at once: with its transcript when it has one, else while it
  *  waits. It plays among `within` (a scope: a list by tag, or the folder it is stepped through), else
  *  among its folder's lectures. It goes on where it was left, unless `fromStart`: only a lecture
- *  picked from a list resumes, not one that follows another (the end mode, ⏮/⏭) or a random one. */
-async function openFromDropbox(it, within, { fromStart = false } = {}) {
+ *  picked from a list resumes, not one that follows another (the end mode, ⏮/⏭) or a random one.
+ *  `coming` (showComing) is a lecture put in place of the open one: it plays once open only if
+ *  coming.play says so (Stop leaves it paused; a tap on play meanwhile changes that). */
+async function openFromDropbox(it, within, { fromStart = false, coming: next = null } = {}) {
   allowMedia();   // a tap in the list, on shuffle, on a recent lecture or Play by tag
   if (!dbx || library.opening) return;
   library.opening = true;
   setProblems([]);
   $("libNote").textContent = `Opening ${it.name}…`;
+  let opened = false;
   try {
-    const linking = linkFor(it.path), ref = it.entry?.transcript ? `gh:${gh.repo}:${it.entry.transcript}` : null;
-    const reading = ref && ((upNext?.it.path === it.path && upNext.text) || transcriptFile(ref).catch(() => null));   // meanwhile
+    const linking = linkFor(it.path), ref = transcriptRef(it), got = ahead.get(it.path);
+    const reading = ref && (got?.ref === ref ? got.text : transcriptFile(ref).catch(() => null));   // meanwhile, or fetched ahead
+    ahead.delete(it.path);
     linking.catch(() => {});   // thrown below
     const { info, fingerprint, audio, art } = await dropboxMediaInfo(it);
     const { link, fetched } = await linking;
@@ -930,24 +935,33 @@ async function openFromDropbox(it, within, { fromStart = false } = {}) {
     if (entryStatus(entry) === "ready") {
       const text = (await reading) || await transcriptFile(ref);
       if (!text) throw new Error("its transcript isn't on this device, and GitHub can't be reached.");
-      await openPair(JSON.parse(text), picked, { ref, key: entry.key, sure: true, fromStart });
+      await openPair(JSON.parse(text), picked, { ref, key: entry.key, sure: true, fromStart, coming: next });
     } else {
-      openWaiting(picked);
+      openWaiting(picked, next);
     }
     if (S.picked === picked) {
+      opened = true;
       stream = { path: it.path, fetched, renewing: false, lastError: 0 };
       scope = within ?? { folder: it.folder, played: new Set() };
       drawSteps();
       trackVideo(picked, entry);
+      aheadSoon(picked);
     }
   } catch (err) {
     setProblems([`Could not open ${it.name}: ${err.message}`]);
     if (!player.hidden) toast(`Could not open ${it.name}: ${err.message}`);   // the next one, in the player
   } finally {
     library.opening = false;
+    if (next && coming === next) {
+      coming = null;
+      if (!opened && !player.hidden) unshowComing();   // still the lecture before
+      drawPlayLook(!media().paused);
+    }
     drawLibrary();
   }
 }
+/** Where a library lecture's transcript is, when it has one. */
+const transcriptRef = (it) => (it.entry?.transcript && gh ? `gh:${gh.repo}:${it.entry.transcript}` : null);
 
 // A Dropbox link lasts 4 hours: it is renewed before then, and at once when the video stops with an
 // error (an expired link), keeping the position and whether it was playing. While the app is hidden
@@ -1200,7 +1214,7 @@ async function openPair(data, picked, src) {
   }
   showVideo(picked, src.fromStart ? 0 : rec.position);
   await useTranscript(data, picked, src, rec);
-  if (S.picked === picked) resume();   // a lecture opened plays at once
+  if (S.picked === picked && (src.coming?.play ?? true)) resume();   // a lecture opened plays at once (Stop's next one waits)
 }
 
 /** Shows the player with this video (subtitles come from useTranscript), resuming at resumeAt s. */
@@ -1277,15 +1291,15 @@ async function useTranscript(data, picked, { ref, key, text, entry }, rec) {
 }
 
 /** Plays a video that has no transcript yet; the subtitle area says what is happening, and the
- *  subtitles come when the transcript does. */
-function openWaiting(picked) {
+ *  subtitles come when the transcript does. (Stop's next lecture, `coming`, waits for play.) */
+function openWaiting(picked, coming = null) {
   showVideo(picked);
   Object.assign(S, { transcript: null, id: null, rec: {}, repoKey: null, baseWords: [], words: [], pieces: [], events: [],
     durationMs: Math.round(picked.info.durationSec * 1000), audioOffsetMs: isFirefox ? 0 : Math.round(picked.info.audioStartSec * 1000),
     shown: -2, lastSecond: -1 });
   draw(-1);
   renderGet();
-  resume();
+  if (coming?.play ?? true) resume();
 }
 
 /** Ties the open lecture to its place in the repository: syncs its fixes, or first puts a
@@ -1970,9 +1984,24 @@ video.addEventListener("loadedmetadata", captionsOff);
 video.textTracks.addEventListener?.("addtrack", captionsOff);
 
 // ---------------------------------------------------------------- controls
-const togglePlay = () => (media().paused ? resume() : pausePlayback());
+/** Play or pause; while the next lecture is put in place (showComing), whether it plays once open. */
+function togglePlay() {
+  if (coming) return comingPlays(!coming.play);
+  media().paused ? resume() : pausePlayback();
+}
+function comingPlays(on) {
+  allowMedia();   // a tap, mostly
+  coming.play = on;
+  drawPlayLook(on);
+}
+/** The play button: ❚❚ while playing (or about to: the next lecture put in place plays once open). */
+function drawPlayLook(on) {
+  if (coming) on = coming.play;
+  $("playBtn").textContent = on ? "❚❚" : "▶︎";
+  $("playBtn").ariaLabel = on ? "Pause" : "Play";
+}
 $("playBtn").addEventListener("click", togglePlay);
-video.addEventListener("play", () => { S.playing = true; $("playBtn").textContent = "❚❚"; $("playBtn").ariaLabel = "Pause"; keepAwake(true); });
+video.addEventListener("play", () => { S.playing = true; drawPlayLook(true); keepAwake(true); });
 video.addEventListener("playing", () => queuePlayed([playingFile()]));
 video.addEventListener("pause", () => {
   if (video.ended) S.playing = false;
@@ -1983,8 +2012,7 @@ video.addEventListener("pause", () => {
     if (document.hidden) handOver();
     else setTimeout(() => { if (video.paused && S.playing && !bgOn) handOver(); }, 1000);
   }
-  $("playBtn").textContent = "▶︎";
-  $("playBtn").ariaLabel = "Play";
+  drawPlayLook(false);
   keepAwake(false);
   save();
 });
@@ -2055,11 +2083,12 @@ panel.addEventListener("click", (e) => {
 // Two rows of parts (data-el in index.html), arranged by the viewer and kept on this device:
 // Settings → Arrange the buttons, then tap a part and move it. Settings itself can't be hidden,
 // so the bar can always be arranged again.
-const BAR_DEFAULT = { rows: [["title", "progress", "highlight", "timing", "notes", "fix", "lock", "important", "endmode", "sleep", "fullscreen",
+const BAR_DEFAULT = { rows: [["title", "hide", "progress", "highlight", "timing", "notes", "fix", "lock", "important", "endmode", "sleep", "fullscreen",
   "settings"], ["back", "previous", "rewind", "play", "forward", "next", "speed"]], hidden: [] };
 const BAR_LABELS = { progress: "Progress bar", highlight: "Soft highlight", lock: "Lock", back: "Back", rewind: "−5s", play: "Play",
   forward: "+5s", speed: "Speed", timing: "Timing", fix: "Fix", settings: "Settings", fullscreen: "Full screen", notes: "Notes",
-  previous: "Previous lecture", next: "Next lecture", endmode: "End mode", sleep: "Sleep timer", important: "Important", title: "File name" };
+  previous: "Previous lecture", next: "Next lecture", endmode: "End mode", sleep: "Sleep timer", important: "Important", title: "File name",
+  hide: "Hide from the list" };
 // Kept here, not looked up: a part taken out of the bar is detached for a moment and couldn't be found.
 const PARTS = new Map([...bar.querySelectorAll("[data-el]")].map((el) => [el.dataset.el, el]));
 const barPart = (id) => PARTS.get(id);
@@ -2672,18 +2701,24 @@ function syncNotes() {
 // A lecture opened from the library plays among its folder's (the library's order, hidden ones
 // passed over); Play by tag gives a list instead. The bar's previous and next buttons go through it
 // in that order, whatever the end mode. The end mode button says what happens when a lecture ends in
-// the app: playback stops; the next one plays, up to the last one; or a random one plays (transcribed
-// ones first) until each has played once. The two that go on are drawn in the highlight color, and
-// the lecture that comes next is fetched ahead, so that it opens quickly (readyNext). Leaving
-// the player sets it back to stop. A folder's in-order button plays it to its end from its first new
-// lecture (playFolderOn).
+// the app: the next one is put in place, paused (Stop); the next one plays, up to the last one; or a
+// random one plays (transcribed ones first) until each has played once. The two that go on are drawn
+// in the highlight color. The lecture that comes next is fetched ahead, so that it opens quickly
+// (fetchAhead). Leaving the player sets the mode back to Stop. A folder's in-order button plays it to
+// its end from its first new lecture (playFolderOn). A lecture that ends while the app is hidden just
+// stops; the next one is put in place, paused, once the app is back (nextOnReturn).
 let scope = null;   // {folder} or {list, label}, with played: the paths played in it (for random)
 let endMode = "stay";   // one of END_MODES
+let coming = null;   // {it, play}: the lecture opening in place of the one before (showComing), and whether it plays once open
+let endSeen = null;   // S.picked once its end is dealt with: an end said again (the video taking over from bg there) counts once
+let endAway = null;   // {picked, it}: a lecture that ended while the app was hidden, and the one to put in its place when it's back
 const lectureTitle = (it) => it.name.replace(/\.[^.]+$/, "");
-/** The lectures the open one plays among. */
+/** The lectures the open one plays among: a list by tag, or its folder's without the hidden ones
+ *  (but with the open one, hidden or not, so that the steps go on from it). */
 function scopeList() {
   if (!scope) return [];
-  return scope.list ?? library.items.filter((i) => i.folder === scope.folder && !library.hidden.has(i.hash));
+  const open = openItem()?.path;
+  return scope.list ?? library.items.filter((i) => i.folder === scope.folder && (!library.hidden.has(i.hash) || i.path === open));
 }
 const scopeName = () => (scope?.list ? "in the list" : "in this folder");
 /** The library's item for the lecture open: streamed from Dropbox, or a copy of one (the same video). */
@@ -2707,11 +2742,17 @@ function ensureScope() {
 /** The bar's previous (-1) and next (1) buttons: that lecture from its start. */
 function stepLecture(dir) {
   const now = ensureScope() && openItem(), it = now && neighbor(scopeList(), now, dir);
-  if (!it) return;
+  if (!it || library.opening) return;
   save();   // the lecture left keeps the very spot
   pausePlayback();
-  showComing(it);
-  playItem(it, scope, { fromStart: true });
+  putInPlace(it, true);
+}
+/** The lecture `it` in place of the open one, from its start: its name and length show at once; it
+ *  plays once open if `play` (a tap on play meanwhile changes that). */
+function putInPlace(it, play) {
+  if (!dbx || library.opening) return;   // it couldn't open now
+  showComing(it, play);
+  playItem(it, scope, { fromStart: true, coming });
 }
 function drawSteps() {
   const now = ensureScope() && openItem(), list = scopeList(), can = (dir) => !!(now && neighbor(list, now, dir));
@@ -2745,25 +2786,34 @@ function pickRandom(now) {
   scope.played.add(now.path);
   return randomOther(scopeList(), now, scope.played);
 }
-/** The lecture that follows `now` as the end mode says, or null: the next one, or a random one (the
- *  one fetched ahead, while it still may be). */
+/** The lecture that follows `now` as the end mode says, or null: the next one (also for Stop, which
+ *  puts it in place without playing it), or a random one (the one chosen ahead, while it still may be). */
 function nextAfter(now) {
-  if (endMode === "next") return neighbor(scopeList(), now, 1);
-  if (endMode !== "shuffle") return null;
-  const c = upNext?.it;
+  if (endMode !== "shuffle") return neighbor(scopeList(), now, 1);
+  const c = upNext?.mode === "shuffle" && upNext.it;
   return c && c.path !== now.path && !scope.played.has(c.path) && scopeList().some((i) => i.path === c.path) ? c : pickRandom(now);
 }
-/** When a lecture ends in the app: what the end mode says. With the app hidden it just ends. The next
- *  one's name and length show at once, and it opens from its start (fetched ahead: readyNext). */
+/** When a lecture ends: the next one is put in place from its start (its name and length show at
+ *  once; fetched ahead, it opens quickly), and plays unless the end mode is Stop. With the app hidden
+ *  the lecture just ends, and the next one is put in place, paused, once the app is back. */
 function lectureEnded() {
   S.playing = false;
-  const ended = ensureScope() && openItem(), now = endMode !== "stay" && !document.hidden && ended;
-  const it = now && nextAfter(now);   // before the one that ended may leave the list
-  if (now && !it) toast(endMode === "next" ? `That was the last lecture ${scopeName()}.` : `Every lecture ${scopeName()} has played.`);
-  if (ended) countFinished(ended);
-  if (!it) return;
-  showComing(it);
-  playItem(it, scope, { fromStart: true });
+  if (endSeen === S.picked) return;   // the same end again
+  endSeen = S.picked;
+  const ended = ensureScope() && openItem();
+  if (!ended) return;
+  const it = nextAfter(ended), away = document.hidden;   // before the one that ended may be hidden
+  if (!it && !away) toast(endMode === "shuffle" ? `Every lecture ${scopeName()} has played.` : `That was the last lecture ${scopeName()}.`);
+  countFinished(ended);
+  if (!it || library.opening) return;
+  if (away) endAway = { picked: S.picked, it };
+  else putInPlace(it, endMode !== "stay");
+}
+/** Back in the app after a lecture ended while it was hidden: the next one in its place, paused. */
+function nextOnReturn() {
+  const away = endAway;
+  endAway = null;
+  if (away && away.picked === S.picked && !player.hidden && media().paused && !library.opening) putInPlace(away.it, false);
 }
 // Plays to the end, kept on this device by file (Dropbox's content hash) with when each was, the last
 // 20: Settings → Hiding files hides a lecture once it has played to the end prefs.hideAfter times (0:
@@ -2794,8 +2844,10 @@ function forgetFinished(items) {
 }
 /** As the next lecture opens, before anything about it is fetched: its name and length (the index's)
  *  in the bar, the window's title and on the lock screen, and the subtitles of the one before give way
- *  to a line saying it loads. */
-function showComing(it) {
+ *  to a line saying it loads. The play button says whether it plays once open (`play`). */
+function showComing(it, play) {
+  coming = { it, play };
+  drawPlayLook(play);
   $("barTitle").textContent = $("barTitle").title = it.name;
   document.title = `${lectureTitle(it)} · Lecture Karaoke`;
   $("time").textContent = clock(0);
@@ -2809,8 +2861,18 @@ function showComing(it) {
     try { mediaSession.metadata = new MediaMetadata({ title: lectureTitle(it), artist: shownFolder(it.folder), album: "Lecture Karaoke" }); } catch { /* not here */ }
   }
 }
+/** The next lecture couldn't be opened: the bar, the subtitles and the lock screen are the open
+ *  lecture's again. */
+function unshowComing() {
+  $("barTitle").textContent = $("barTitle").title = S.videoName;
+  document.title = `${S.videoName.replace(/\.[^.]+$/, "")} · Lecture Karaoke`;
+  S.lastSecond = -1;   // its time and length
+  if (S.pieces?.length) rebuildEvents();
+  else { S.shown = -2; draw(-1); }
+  setLook();
+}
 const END_LOOKS = {
-  stay: { svg: () => STAY_SVG, says: "When this lecture ends, playback stops." },
+  stay: { svg: () => STAY_SVG, says: () => `When a lecture ends, playback stops, with the next one ${scopeName()} ready to play.` },
   next: { svg: () => LIST_SVG, says: () => `When a lecture ends, the next one ${scopeName()} plays, up to the last one.`, always: true },
   shuffle: { svg: () => SHUFFLE_SVG, says: () => `When a lecture ends, a random one ${scopeName()} plays, until each has played once.`, always: true },
 };
@@ -2966,10 +3028,11 @@ function playHidden(at) {
 function toForeground() {
   video.muted = false;   // it was while bg played
   if (!bgOn) return;
-  const at = bg.currentTime, playing = !bg.paused && !bg.ended;
+  const at = bg.currentTime, playing = !bg.paused && !bg.ended, picked = S.picked;
   bgOn = false;
   bg.pause();
   const go = () => {
+    if (S.picked !== picked) return;   // another lecture is in place by now
     video.currentTime = at;
     if (playing) video.play().catch(() => {});
     else drawNowPlaying();
@@ -2978,35 +3041,54 @@ function toForeground() {
   else video.addEventListener("loadedmetadata", go, { once: true });
 }
 document.addEventListener("visibilitychange", () => {
-  if (!document.hidden) toForeground();
+  if (!document.hidden) { toForeground(); nextOnReturn(); }
   else if (BG && S.playing && !bgOn && !player.hidden && !video.ended && hasPicture()) playHidden();
 });
 
-// The next lecture, fetched ahead (in the app, while the end mode goes on to another one): 30 s
-// before the lecture playing ends, the one that comes next gets its Dropbox link, its transcript and
-// what the player needs to know of the file (readyNext), so that it opens quickly; then it loads and
-// plays as any lecture does, after a moment. (3.1.0 to 3.3.0 also loaded its sound ahead, in bg,
-// which played at once while the video caught up; on iPhone the video didn't load until paused and
-// played again.)
-let upNext = null;   // {it, text}
+// The lectures that may come next, fetched ahead so that they open at once (then only the video has
+// to load): the next one in the folder or list, as soon as the open lecture plays (or 3 s after it
+// opened), for ⏭, the end mode's next and the one Stop puts in place; and 30 s before the end, the one
+// the end mode picks (shuffle's random one is chosen then and kept: upNext). Each gets its Dropbox
+// link (kept by linkFor), its transcript (kept here, by path) and what the player needs to know of
+// the file (dropboxMediaInfo keeps that). (3.1.0 to 3.3.0 also loaded the next one's sound ahead, in
+// bg; on iPhone the video then didn't load until paused and played again.)
+const ahead = new Map();   // path → {ref, text: a promise of its transcript text, or of null}
+let upNext = null;   // {it, mode}: the lecture to follow the open one, chosen near its end in that end mode
+function fetchAhead(it) {
+  if (!it || !dbx || ahead.has(it.path)) return;
+  it = library.items.find((i) => i.path === it.path) ?? it;   // a list by tag keeps its items as they were
+  const ref = it.status === "ready" ? transcriptRef(it) : null;
+  ahead.set(it.path, { ref, text: ref ? transcriptFile(ref).catch(() => null) : Promise.resolve(null) });
+  while (ahead.size > 3) ahead.delete(ahead.keys().next().value);
+  linkFor(it.path).catch(() => {});
+  dropboxMediaInfo(it).catch(() => {});
+}
+/** The next lecture in the folder or list, fetched ahead once the open one plays, or 3 s after it opened. */
+function aheadSoon(picked) {
+  const go = () => {
+    clearTimeout(timer);
+    video.removeEventListener("playing", go);
+    const now = S.picked === picked && !player.hidden && ensureScope() && openItem();
+    if (now) fetchAhead(neighbor(scopeList(), now, 1));
+  };
+  const timer = setTimeout(go, 3000);
+  video.addEventListener("playing", go);
+}
 video.addEventListener("timeupdate", () => {
-  if (upNext || endMode === "stay" || document.hidden || player.hidden || video.paused || !(video.duration > 0)) return;
+  if (upNext || document.hidden || player.hidden || video.paused || !(video.duration > 0)) return;
   if ((video.duration - video.currentTime) / (video.playbackRate || 1) <= 30) readyNext();
 });
-async function readyNext() {
+function readyNext() {
   const now = dbx && ensureScope() && openItem(), it = now && nextAfter(now);
   if (!it) return;
-  const ready = (upNext = { it, text: null });
-  try {
-    const ref = it.status === "ready" && it.entry?.transcript ? `gh:${gh.repo}:${it.entry.transcript}` : null;
-    const [, text] = await Promise.all([linkFor(it.path), ref && transcriptFile(ref), dropboxMediaInfo(it)]);
-    if (upNext === ready) ready.text = text;
-  } catch { /* it opens as usual */ }
+  upNext = { it, mode: endMode };
+  fetchAhead(it);
 }
 
 for (const el of [video, bg]) {
   const mine = (fn) => () => { if (el === media()) fn(); };
   el.addEventListener("ended", mine(lectureEnded));
+  el.addEventListener("playing", () => { endSeen = endAway = null; });   // played again: its next end counts too
   el.addEventListener("playing", mine(() => { const now = ensureScope() && openItem(); if (now) scope.played.add(now.path); }));
   el.addEventListener("timeupdate", mine(() => { if (sleep) checkSleep(); }));
   for (const ev of ["playing", "pause", "ratechange", "seeked", "loadedmetadata", "ended"]) el.addEventListener(ev, mine(drawNowPlaying));
@@ -3030,22 +3112,30 @@ function drawNowPlaying() {
 }
 // The lock screen's buttons: play/pause only. WebKit offers the phone just the actions that have a
 // handler, so it shows no skip buttons either.
-setAction("play", resume);
-setAction("pause", pausePlayback);
+setAction("play", () => (coming ? comingPlays(true) : resume()));   // while the next lecture is put in place: whether it plays
+setAction("pause", () => (coming ? comingPlays(false) : pausePlayback()));
 
 // Dropbox links, kept for opening a lecture again while they last (4 hours).
 const links = new Map();   // path → {link, fetched}
+const asking = new Map();   // path → the promise of a link being asked for (ahead, say), which an open then waits for
 async function linkFor(path) {
   const got = links.get(path);
   if (got && Date.now() - got.fetched < LINK_RENEW_MS) return got;
-  const { link } = await dbx.temporaryLink(path);
-  const fresh = { link, fetched: Date.now() };
-  links.set(path, fresh);
-  return fresh;
+  if (!asking.has(path)) {
+    asking.set(path, dbx.temporaryLink(path).then(({ link }) => {
+      const fresh = { link, fetched: Date.now() };
+      links.set(path, fresh);
+      return fresh;
+    }).finally(() => asking.delete(path)));
+  }
+  return asking.get(path);
 }
 
-// ⋯ Settings → This lecture, and the bar's star: a library lecture's star, as in the list.
+// ⋯ Settings → This lecture, and the bar's star: a library lecture's star, as in the list. The bar's
+// hide button takes the open lecture off the library's list (lit while it is off it; a tap puts it
+// back), as hide mode's eye does there, with Undo for 3 s. It plays on, and ⏮/⏭ still go on from it.
 $("starBtn").innerHTML = STAR_SVG;
+$("hideBtn").innerHTML = EYE_OFF_SVG;
 function drawThisLecture() {
   const it = !player.hidden && openItem(), important = !it || !library.unimportant.has(it.hash);
   $("thisSet").hidden = !it;
@@ -3055,7 +3145,12 @@ function drawThisLecture() {
   b.setAttribute("aria-pressed", String(important));
   b.title = !it ? "Important: for lectures in the Dropbox library"
     : important ? "Important (tap: not important, left out of Play by tag)" : "Not important: left out of Play by tag (tap: important)";
+  const h = $("hideBtn"), hidden = !!it && library.hidden.has(it.hash);
+  h.disabled = !it;
+  h.setAttribute("aria-pressed", String(hidden));
+  h.title = !it ? "Hide from the list: for lectures in the Dropbox library" : hidden ? "Hidden from the list (tap: show it in the list again)" : "Hide from the list";
 }
+$("hideBtn").addEventListener("click", () => { const it = openItem(); if (it) setHidden([it], !library.hidden.has(it.hash), { undoMs: 3000 }); });
 $("thisImportant").addEventListener("change", () => { const it = openItem(); if (it) setImportant([it], $("thisImportant").checked); });
 $("starBtn").addEventListener("click", () => { const it = openItem(); if (it) setImportant([it], library.unimportant.has(it.hash), true); });
 
@@ -3117,7 +3212,8 @@ function goHome() {
   video.pause();
   bgOn = false;
   video.muted = false;
-  upNext = null;
+  upNext = coming = endAway = null;
+  ahead.clear();
   setEndMode("stay");   // the end mode starts at stop every time
   save();
   player.hidden = true;
@@ -3329,7 +3425,8 @@ if (dev) {
     loadLibrary, pollTranscript, probeMedia, viz, get gh() { return gh; }, get dbx() { return dbx; }, get W() { return W; },
     get stream() { return stream; }, get transfer() { return transfer; }, get audioGraph() { return audioGraph; },
     bg, get bgOn() { return bgOn; }, get scope() { return scope; }, get endMode() { return endMode; },
-    get upNext() { return upNext; } };   // for checks
+    get upNext() { return upNext; }, ahead, links, get coming() { return coming; }, get endAway() { return endAway; },
+    get endSeen() { return endSeen; }, lectureEnded, nextOnReturn };   // for checks
   const q = new URLSearchParams(location.search);
   // ?pick=URL: as if that file had been picked on this device
   if (q.get("pick")) {

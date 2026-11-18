@@ -7,7 +7,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Karaoke">
-<meta name="app-version" content="3.5.0">
+<meta name="app-version" content="3.6.0">
 <meta name="description" content="Plays your lecture videos and audio recordings, from your device or your Dropbox, with live karaoke subtitles from their Soniox transcripts; new ones get transcribed on GitHub.">
 <title>Lecture Karaoke</title>
 <link rel="manifest" href="manifest.webmanifest">
@@ -123,10 +123,12 @@
       <button id="lockBtn" class="icon" data-el="lock" aria-label="Lock the screen against touches"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 11V8a4 4 0 0 1 8 0v3" fill="none" stroke="currentColor" stroke-width="2.2"/><rect x="5" y="11" width="14" height="10" rx="2.5" fill="currentColor"/></svg></button>
       <!-- The lecture's star (app.js, drawThisLecture): filled while important, a tap switches it. -->
       <button id="starBtn" class="icon star" data-el="important" aria-pressed="true" aria-label="Important" disabled></button>
+      <!-- Takes the open lecture off the library's list, or puts it back (app.js, drawThisLecture); it sits beside the file name. -->
+      <button id="hideBtn" class="icon hide" data-el="hide" aria-pressed="false" aria-label="Hide from the list" disabled></button>
       <button id="fsBtn" class="icon" data-el="fullscreen" aria-label="Full screen">⛶</button>
       <button id="prevBtn" class="icon" data-el="previous" aria-label="Previous lecture" title="Previous lecture" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 5v14" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/><path d="M19 5.5v13L8.5 12z" fill="currentColor"/></svg></button>
       <button id="nextBtn" class="icon" data-el="next" aria-label="Next lecture" title="Next lecture" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 5v14" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/><path d="M5 5.5v13L15.5 12z" fill="currentColor"/></svg></button>
-      <!-- What happens when a lecture ends (app.js, one lecture after another): a tap goes to the next of five. -->
+      <!-- What happens when a lecture ends (app.js, one lecture after another): a tap goes to the next of three. -->
       <button id="endBtn" class="icon" data-el="endmode" aria-label="End mode"></button>
       <button id="sleepBtn" class="icon" data-el="sleep" aria-pressed="false" aria-label="Sleep timer" aria-haspopup="dialog"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19.5 14.6A8 8 0 1 1 9.4 4.5a6.4 6.4 0 0 0 10.1 10.1z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg></button>
     </div>
