@@ -154,6 +154,14 @@ body.dragging .welcome { outline: 3px dashed var(--hi); outline-offset: -10px; }
   background: rgba(0, 0, 0, 0.65); color: #fff; font: 600 26px/1.2 -apple-system, BlinkMacSystemFont, sans-serif;
   white-space: nowrap; opacity: 0; transition: opacity 0.25s; pointer-events: none; }
 .flash.show { opacity: 1; transition: none; }
+/* the stream can't keep up for a moment: it goes on by itself */
+.loading-note { position: absolute; z-index: 1; left: 50%; bottom: 10px; transform: translateX(-50%); display: flex; align-items: center; gap: 8px;
+  padding: 6px 12px; border-radius: 999px; background: rgba(0, 0, 0, 0.6); color: #fff; font: 13px/1.2 -apple-system, BlinkMacSystemFont, sans-serif;
+  pointer-events: none; }
+.loading-note[hidden] { display: none; }
+.loading-note::before { content: ""; width: 12px; height: 12px; border-radius: 50%; border: 2px solid rgba(255, 255, 255, 0.35); border-top-color: #fff;
+  animation: spin 0.8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
 .video-box video { width: 100%; height: 100%; display: block; object-fit: contain; background: #000; }
 /* a rotated, flipped or cropped picture is laid out by app.js (applyView); what the crop leaves out is cut off */
 .video-box.turned { overflow: hidden; }
@@ -247,11 +255,13 @@ body.dragging .welcome { outline: 3px dashed var(--hi); outline-offset: -10px; }
 .bar-title { flex: 1 1 calc(100% - var(--beside, 0) * 48px); min-width: 0; overflow: hidden; text-align: center; font-size: 13px; line-height: 1.3;
   color: var(--dim); display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow-wrap: anywhere; }
 .bar .icon.beside-title { min-width: 40px; padding: 3px 8px; }   /* over the narrow-screen sizes below */
+.bar .chip.swap { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.bar .chip.beside-progress { min-width: 66px; padding: 3px 8px; font-size: 13px; }
 .bar .icon.beside-title svg { width: 16px; height: 16px; }
 .progress { flex: 1 1 160px; display: flex; align-items: center; gap: 8px; min-width: 0; }
 .progress input[type=range] { flex: 1; min-width: 60px; accent-color: var(--hi); }
 .time { font-variant-numeric: tabular-nums; font-size: 13px; color: var(--dim); white-space: nowrap; }
-@media (max-width: 540px) { .bar .progress { flex-basis: 100%; } }   /* a phone upright: the progress bar on a line of its own */
+@media (max-width: 540px) { .bar .progress { flex-basis: calc(100% - var(--beside, 0) * 74px); } }   /* a phone upright: the progress bar on a line of its own, with the speed switch */
 @media (max-width: 430px) { .bar { padding-left: 6px; padding-right: 6px; } .bar-row { gap: 4px; } .bar .icon { min-width: 36px; padding: 8px 4px; } .bar .chip { padding: 7px 6px; } }
 @media (max-width: 400px) { .bar-row { gap: 3px; } .bar .icon { min-width: 34px; } }   /* a 375 px phone: each row on one line */
 @media (max-width: 360px) { .bar .icon { min-width: 32px; padding: 8px 4px; } .bar .chip { padding: 7px 4px; font-size: 13px; } .bar .play { min-width: 44px; } }
@@ -294,6 +304,11 @@ select, #editorText { width: 100%; padding: 10px; border-radius: 10px; border: 1
 .range-ends span:first-child { left: -10px; }
 .range-ends span:last-child { right: -10px; }
 .speed-step { margin: 0 0 12px; }
+.swap-head { margin: 16px 0 8px; font-size: 15px; font-weight: 600; }
+.swap-speeds { display: grid; grid-template-columns: 1fr auto; gap: 8px 10px; align-items: center; }
+.swap-speeds label { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--dim); white-space: nowrap; }
+.swap-speeds input { width: 84px; padding: 8px; border-radius: 10px; border: 1px solid var(--line); background: #000; text-align: center; font-size: 16px; }
+.swap-speeds button { padding: 8px 10px; font-size: 14px; }
 .speed-step button { min-width: 56px; padding: 10px 12px; }
 /* the highlight: color swatches (the last one opens a color picker), then full color and soft, each with a sample */
 .swatches { display: grid; grid-template-columns: repeat(7, minmax(24px, 34px)); gap: 10px; margin: 2px 0 12px; }   /* one row, even on a phone */

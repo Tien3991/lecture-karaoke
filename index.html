@@ -7,7 +7,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Karaoke">
-<meta name="app-version" content="3.7.1">
+<meta name="app-version" content="3.8.0">
 <meta name="description" content="Plays your lecture videos and audio recordings, from your device or your Dropbox, with live karaoke subtitles from their Soniox transcripts; new ones get transcribed on GitHub.">
 <title>Lecture Karaoke</title>
 <link rel="manifest" href="manifest.webmanifest">
@@ -75,6 +75,8 @@
     <div id="cover" class="cover" hidden><img id="coverBack" class="cover-back" alt="" draggable="false"><img id="coverArt" class="cover-art" alt="" draggable="false"></div>
     <canvas id="viz" class="viz" hidden></canvas>
     <div id="flash" class="flash" aria-hidden="true"></div>
+    <!-- While the video waits for its stream (app.js): it goes on by itself once the stream has caught up. -->
+    <div id="loadingNote" class="loading-note" role="status" hidden>Loading…</div>
     <!-- The crop box, over the whole picture while it is drawn (app.js, the picture): drag it, a side, a corner, or across the picture. -->
     <div id="cropLayer" class="crop-layer" hidden><div id="cropBox" class="crop-box"><i data-h="n"></i><i data-h="s"></i><i data-h="w"></i><i data-h="e"></i><i data-h="nw"></i><i data-h="ne"></i><i data-h="sw"></i><i data-h="se"></i></div></div></div>
   <div id="panel" class="panel">
@@ -128,6 +130,8 @@
       <button id="rewindBtn" class="icon" data-el="rewind" aria-label="Back 5 seconds">−5s</button>
       <button id="playBtn" class="icon play" data-el="play" aria-label="Play">▶︎</button>
       <button id="forwardBtn" class="icon" data-el="forward" aria-label="Forward 5 seconds">+5s</button>
+      <!-- Switches between the two speeds chosen in the speed dialog (app.js, the speed switch); it says the speed it goes to. -->
+      <button id="swapBtn" class="chip swap" data-el="speedswap" aria-label="Switch speed">⇄ 2×</button>
       <span class="speed-group" data-el="speed"><button id="barSlower" class="icon step" aria-label="Slower (−0.05×)">−</button><button id="speedBtn" class="chip" aria-label="Playback speed" aria-haspopup="dialog">1×</button><button id="barFaster" class="icon step" aria-label="Faster (+0.05×)">+</button></span>
       <button id="leadBtn" class="chip" data-el="timing" aria-pressed="false" aria-label="Subtitle timing: exact, or the offset set in Settings">Exact</button>
       <button id="hiBtn" class="chip" data-el="highlight" aria-pressed="false" aria-label="Soft highlight, set in Settings">Soft</button>
@@ -336,6 +340,14 @@
       <select id="speedPreset" aria-label="Preset speeds"></select>
     </div>
     <p class="small">− and + change the speed by 0.05×, from 0.2× to 4×. <span id="speedFor"></span></p>
+    <h3 class="swap-head">Speed switch (⇄ in the bar)</h3>
+    <div class="swap-speeds">
+      <label>Speed 1 <input type="number" id="swapA" min="0.2" max="4" step="0.05" inputmode="decimal"></label>
+      <button type="button" id="swapANow" title="Use the speed it plays at now">Use now</button>
+      <label>Speed 2 <input type="number" id="swapB" min="0.2" max="4" step="0.05" inputmode="decimal"></label>
+      <button type="button" id="swapBNow" title="Use the speed it plays at now">Use now</button>
+    </div>
+    <p class="small">⇄ switches between these two (key S). Kept on this device.</p>
     <!-- The slider is gone since 2.7.0; 2.6.x and older scripts look it up at start, so it stays, hidden. -->
     <input type="range" id="speedRange" min="0" max="1000" step="1" aria-hidden="true" tabindex="-1" hidden>
     <div class="dialog-buttons">

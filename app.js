@@ -22,7 +22,7 @@ import { applyNoteChanges, newNoteId, noteStamp, shownNotes } from "./core/notes
 import * as store from "./core/store.js";
 import { zipFiles } from "./core/zip.js";
 
-const VERSION = "3.7.1";
+const VERSION = "3.8.0";
 // Proportions of the burned vertical video (identical in every pipeline calibration), in em of
 // the main subtitle text: line limit, frame width, and the height the three blocks need.
 const FIT_EM = 892.4 / 67.797, FRAME_EM = 1080 / 67.797, PANEL_EM = 14.4, CTX_SCALE = 74 / 93;
@@ -83,7 +83,7 @@ const HI_COLORS = [["Yellow", "#ffe000"], ["Orange", "#fb923c"], ["Green", "#4ad
 // The soft highlight keeps this % of the color, the rest the white of the words to come.
 const HI_SOFT_RANGE = [20, 90], HI_SOFT_DEFAULT = 40;
 const prefs = { rate: 1, folderRates: {}, offsetMs: 3000, offsetOn: false, split: { portrait: null, landscape: null }, bar: null,
-  uploadFolder: "Uploads", hi: { color: HI_COLORS[0][1], soft: false, strength: HI_SOFT_DEFAULT }, lockDim: 0, hideAfter: 0, hideWithin: 7 };
+  uploadFolder: "Uploads", hi: { color: HI_COLORS[0][1], soft: false, strength: HI_SOFT_DEFAULT }, lockDim: 0, hideAfter: 0, hideWithin: 7, speedPair: [1, 2] };
 try {
   const saved = JSON.parse(localStorage.getItem(PREFS_KEY) || "{}");
   Object.assign(prefs, saved, { split: { ...prefs.split, ...saved.split } });
@@ -98,6 +98,10 @@ delete prefs.endMode;       // until 2.15.0 the end mode was kept; now leaving t
 delete prefs.lockButtons;   // 2.12.0 to 2.14.0's choice of lock screen buttons
 delete prefs.seamless;      // 2.13.0 to 2.15.0's second stream
 prefs.lockDim = clamp(Number(prefs.lockDim) || 0, 0, 1);
+{
+  const pair = Array.isArray(prefs.speedPair) ? prefs.speedPair.map(Number) : [];
+  prefs.speedPair = [0, 1].map((i) => (Number.isFinite(pair[i]) ? Math.round(clamp(pair[i], RATE_MIN, RATE_MAX) * 100) / 100 : [1, 2][i]));
+}
 prefs.hideAfter = clamp(Math.round(Number(prefs.hideAfter) || 0), 0, 99);
 prefs.hideWithin = Number.isFinite(Number(prefs.hideWithin)) ? clamp(Math.round(Number(prefs.hideWithin)), 0, 365) : 7;
 prefs.offsetMs = Number.isFinite(Number(prefs.offsetMs)) ? clamp(Number(prefs.offsetMs), -OFFSET_MAX_MS, OFFSET_MAX_MS) : 3000;
@@ -2259,6 +2263,9 @@ const fmtOffset = (ms) => `${ms > 0 ? "+" : ms < 0 ? "−" : "±"}${+Math.abs(ms
 function updateChips() {
   const r = video.playbackRate;
   $("speedBtn").textContent = fmtRate(r);
+  const to = swapTarget();
+  $("swapBtn").textContent = `⇄ ${fmtRate(to)}`;
+  $("swapBtn").title = `Switch to ${fmtRate(to)} (the speed switch goes between ${prefs.speedPair.map(fmtRate).join(" and ")}; set them by tapping the speed)`;
   $("barSlower").disabled = r <= RATE_MIN + 1e-9;
   $("barFaster").disabled = r >= RATE_MAX - 1e-9;
   $("leadBtn").textContent = prefs.offsetOn ? fmtOffset(prefs.offsetMs) : "Exact";
@@ -2286,6 +2293,7 @@ addEventListener("keydown", (e) => {
   else if (k === "e") $("editBtn").click();
   else if (k === "n") $("notesBtn").click();
   else if (k === "c" && !$("peekBtn").hidden && !$("peekBtn").disabled) $("peekBtn").click();
+  else if (k === "s") switchSpeed();
   else if (k === "f" && canFullscreen) $("fsBtn").click();
   else return;
   e.preventDefault();
@@ -2305,14 +2313,14 @@ panel.addEventListener("click", (e) => {
 // Two rows of parts (data-el in index.html), arranged by the viewer and kept on this device:
 // Settings → Arrange the buttons, then tap a part and move it. Settings itself can't be hidden,
 // so the bar can always be arranged again.
-const BAR_DEFAULT = { rows: [["title", "crop", "peek", "hide", "progress", "highlight", "timing", "notes", "fix", "lock", "important", "endmode", "sleep", "fullscreen",
+const BAR_DEFAULT = { rows: [["title", "crop", "peek", "hide", "progress", "speedswap", "highlight", "timing", "notes", "fix", "lock", "important", "endmode", "sleep", "fullscreen",
   "settings"], ["back", "previous", "rewind", "play", "forward", "next", "speed"]], hidden: [] };
 const BAR_LABELS = { progress: "Progress bar", highlight: "Soft highlight", lock: "Lock", back: "Back", rewind: "−5s", play: "Play",
   forward: "+5s", speed: "Speed", timing: "Timing", fix: "Fix", settings: "Settings", fullscreen: "Full screen", notes: "Notes",
   previous: "Previous lecture", next: "Next lecture", endmode: "End mode", sleep: "Sleep timer", important: "Important", title: "File name",
-  hide: "Hide from the list", crop: "Crop", peek: "Crop to the box" };
-/** The small buttons that may follow the file name in its row and share its line. */
-const TITLE_MATES = new Set(["crop", "peek", "hide"]);
+  hide: "Hide from the list", crop: "Crop", peek: "Crop to the box", speedswap: "Speed switch" };
+/** The small parts that may follow the file name, or the progress bar, in its row and share its line. */
+const LINE_MATES = { title: new Set(["crop", "peek", "hide"]), progress: new Set(["speedswap"]) };
 // Kept here, not looked up: a part taken out of the bar is detached for a moment and couldn't be found.
 const PARTS = new Map([...bar.querySelectorAll("[data-el]")].map((el) => [el.dataset.el, el]));
 const barPart = (id) => PARTS.get(id);
@@ -2353,17 +2361,21 @@ function renderBar() {
   fitTitleLine();
   layout();
 }
-/** The crop, crop-to-the-box and hide buttons right after the file name share its line: they are drawn
- *  small (beside-title), and the name leaves room for the ones shown (--beside). */
+/** The crop, crop-to-the-box and hide buttons right after the file name share its line, and the speed
+ *  switch right after the progress bar shares that one's (on a phone, where it has a line of its own):
+ *  they are drawn small (beside-title, beside-progress), and the name or the bar leaves room for the
+ *  ones shown (--beside). */
 function fitTitleLine() {
-  const t = $("barTitle");
-  for (const el of bar.querySelectorAll(".beside-title")) el.classList.remove("beside-title");
-  let n = 0;
-  for (let el = t.nextElementSibling; el && TITLE_MATES.has(el.dataset.el); el = el.nextElementSibling) {
-    el.classList.add("beside-title");
-    if (!el.hidden) n++;
+  for (const [id, mates] of Object.entries(LINE_MATES)) {
+    const head = barPart(id), mark = `beside-${id}`;
+    for (const el of bar.querySelectorAll(`.${mark}`)) el.classList.remove(mark);
+    let n = 0;
+    for (let el = head.nextElementSibling; el && mates.has(el.dataset.el); el = el.nextElementSibling) {
+      el.classList.add(mark);
+      if (!el.hidden) n++;
+    }
+    head.style.setProperty("--beside", String(n));
   }
-  t.style.setProperty("--beside", String(n));
 }
 function setArranging(on) {
   arranging = on;
@@ -2601,7 +2613,7 @@ function syncSpeedControls() {
   $("speedFor").textContent = S.folder == null ? "Kept on this device."
     : `Kept on this device for the lectures in “${folderTitle(S.folder)}”; each folder keeps its own.`;
 }
-$("speedBtn").addEventListener("click", () => { syncSpeedControls(); $("speedDialog").showModal(); });
+$("speedBtn").addEventListener("click", () => { syncSpeedControls(); syncSwapControls(); $("speedDialog").showModal(); });
 $("speedDown").addEventListener("click", () => nudgeRate(-1));
 $("speedUp").addEventListener("click", () => nudgeRate(1));
 $("barSlower").addEventListener("click", () => nudgeRate(-1));
@@ -2622,6 +2634,32 @@ $("speedNum").addEventListener("change", () => {
 $("speedPreset").addEventListener("change", () => { if ($("speedPreset").value) applyRate(Number($("speedPreset").value)); });
 $("speedNormal").addEventListener("click", () => applyRate(1));
 video.addEventListener("ratechange", () => { updateChips(); syncSpeedControls(); });
+// The speed switch (⇄ beside the progress bar, or S): between two speeds chosen in the speed dialog,
+// kept on the device. A tap goes to the one of the two that is farther from the speed now (the other
+// one, also after − or + changed it a little). Like any speed chosen, it is kept for the folder.
+function swapTarget() {
+  const r = video.playbackRate || prefs.rate, [a, b] = prefs.speedPair;
+  return Math.abs(r - a) >= Math.abs(r - b) ? a : b;
+}
+function switchSpeed() {
+  if (applyRate(swapTarget())) flash(fmtRate(video.playbackRate));
+}
+$("swapBtn").addEventListener("click", switchSpeed);
+function syncSwapControls() {
+  prefs.speedPair.forEach((r, i) => { const el = $(i ? "swapB" : "swapA"); if (document.activeElement !== el) el.value = r.toFixed(2); });
+}
+for (const [i, id] of [[0, "swapA"], [1, "swapB"]]) {
+  $(id).addEventListener("change", () => {
+    const r = parseFloat($(id).value);
+    if (Number.isFinite(r)) prefs.speedPair[i] = Math.round(clamp(r, RATE_MIN, RATE_MAX) * 100) / 100;
+    savePrefs();
+    syncSwapControls();
+    updateChips();
+  });
+}
+for (const [i, id] of [[0, "swapANow"], [1, "swapBNow"]]) {
+  $(id).addEventListener("click", () => { prefs.speedPair[i] = video.playbackRate; savePrefs(); syncSwapControls(); updateChips(); });
+}
 /** Keyboard: the next preset speed up (+1) or down (-1). */
 function stepRate(dir) {
   const r = video.playbackRate;
@@ -3301,17 +3339,46 @@ function fetchAhead(it) {
   linkFor(it.path).catch(() => {});
   dropboxMediaInfo(it).catch(() => {});
 }
-/** The next lecture in the folder or list, fetched ahead once the open one plays, or 3 s after it opened. */
+/** The next lecture in the folder or list, fetched ahead once the open one has loaded enough to play on
+ *  (canplaythrough), or 8 s after it opened: the stream comes first, above all at a high speed. */
 function aheadSoon(picked) {
   const go = () => {
     clearTimeout(timer);
-    video.removeEventListener("playing", go);
+    video.removeEventListener("canplaythrough", go);
     const now = S.picked === picked && !player.hidden && ensureScope() && openItem();
     if (now) fetchAhead(neighbor(scopeList(), now, 1));
   };
-  const timer = setTimeout(go, 3000);
-  video.addEventListener("playing", go);
+  const timer = setTimeout(go, 8000);
+  video.addEventListener("canplaythrough", go);
 }
+
+// While the video waits for its stream (it plays faster than the connection brings it, at a high
+// speed say), "Loading…" shows over it, so that the pause isn't a mystery; it goes on by itself. And
+// if it stands still while it has what it needs (readyState 3 or more, which a stalled player can do
+// after a while at a high speed), a tiny seek starts it again.
+let loadingTimer = 0;
+const waitingNow = () => !player.hidden && !bgOn && S.playing && !video.paused && !video.ended && video.readyState < 3;
+video.addEventListener("waiting", () => {
+  clearTimeout(loadingTimer);
+  loadingTimer = setTimeout(() => { $("loadingNote").hidden = !waitingNow(); }, 500);
+});
+for (const ev of ["playing", "pause", "ended", "emptied", "canplay"]) {
+  video.addEventListener(ev, () => { clearTimeout(loadingTimer); if (!waitingNow()) $("loadingNote").hidden = true; });
+}
+const still = { at: -1, since: 0, nudged: 0 };
+setInterval(() => {
+  if (player.hidden || bgOn || document.hidden || !S.playing || video.paused || video.ended || video.seeking || S.swapping || video.readyState < 3) {
+    still.since = 0;
+    return;
+  }
+  const t = video.currentTime, now = Date.now();
+  if (t !== still.at || !still.since) { still.at = t; still.since = now; return; }
+  if (now - still.since > 6000 && now - still.nudged > 15000) {
+    still.nudged = now;
+    still.since = 0;
+    video.currentTime = t + 0.01;
+  }
+}, 1000);
 video.addEventListener("timeupdate", () => {
   if (upNext || document.hidden || player.hidden || video.paused || !(video.duration > 0)) return;
   if ((video.duration - video.currentTime) / (video.playbackRate || 1) <= 30) readyNext();

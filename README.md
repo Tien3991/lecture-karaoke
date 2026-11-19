@@ -48,7 +48,7 @@ streams again; for a file on the device a browser can't reopen it by itself, so 
 the file picker (its Recents has the video).
 
 The control bar has two rows: by default the lecture's file name (on a line of its own, up to three lines
-for a long one, with the crop, crop-to-the-box and hide buttons at its end), the progress bar (on a phone held upright, on a line of its own too), **Soft**, **Exact**, notes, **Fix**, the lock,
+for a long one, with the crop, crop-to-the-box and hide buttons at its end), the progress bar (on a phone held upright, on a line of its own too, with the speed switch at its end), **Soft**, **Exact**, notes, **Fix**, the lock,
 the star, the end mode, the sleep timer, full screen and ⋯ on top, and back, previous lecture, −5s,
 play, +5s, next lecture and the speed below. ⋯ Settings → *Arrange the buttons* lets you move any button left or right or to
 the other row, or hide it (tap a button, then move it); the arrangement is kept on the device. A
@@ -62,6 +62,7 @@ button added in a later release appears where the default bar has it.
 | `−5s` / `+5s` | back / forward 5 seconds |
 | `▶︎` | play / pause (tapping the video does too) |
 | `−` `1×` `+` | playback speed, 0.2× to 4×: − and + change it by 0.05× (they stay in place, so they can be tapped again); tap the number to type a value or pick a preset. Each Dropbox folder keeps its own speed |
+| `⇄ 2×` (speed switch, beside the progress bar) | switches between two speeds you choose in the speed dialog (tap the speed: *Speed switch*, two speeds, each with *Use now* for the speed it plays at); the button says the speed it goes to, and goes to the one of the two farther from the speed now (so also after − or +). Key `S`. Kept on this device |
 | `Exact` / `+3 s` | switch between exact timing and the offset set in ⋯ Settings (+ before the voice, to read ahead; − after it) |
 | `Soft` | switch the highlight between full color and the soft setting in ⋯ Settings (lit while soft) |
 | lock | lock the screen against touches while the lecture plays: nothing under it reacts, and the bar dims. A touch shows *Slide to unlock*: slide the lock all the way to the right and let go there (stopping short, or wandering off the track, leaves it locked). Above it, the dimmer lays black over the screen: a swipe along it to the left darkens it, all the way to black, and to the right lightens it again (the knob moves as far as the finger; a tap changes nothing; kept on the device for the next lock; it never unlocks). The keyboard still works; on the lock's slider, → moves it a quarter at a time, and on the dimmer ←/→ darken or lighten it a tenth |
@@ -76,7 +77,7 @@ button added in a later release appears where the default bar has it.
 | sleep (moon) | sleep timer: playback pauses after the minutes chosen (a preset, or type them); lit while it runs (no message), and the dialog says how long is left |
 | `⛶` | full screen, where the browser allows it (not iPhone) |
 | handle between video and subtitles | drag to resize them; portrait and landscape are kept separately (double-click, or ⋯ Settings → Automatic, to reset) |
-| keyboard | space play/pause, ←/→ 5 s, ↑/↓ preset speeds, `−`/`+` 0.05× slower/faster, `L` offset, `H` soft highlight, `E` fix, `N` notes, `C` crop to the box or the whole frame, `F` full screen |
+| keyboard | space play/pause, ←/→ 5 s, ↑/↓ preset speeds, `−`/`+` 0.05× slower/faster, `S` the speed switch, `L` offset, `H` soft highlight, `E` fix, `N` notes, `C` crop to the box or the whole frame, `F` full screen |
 
 The app remembers, per transcript, where you stopped, the sync fine-tune, the language and your
 fixes. A lecture you pick (in the library, the recent list or a *Play by tag* list, or with a
@@ -119,6 +120,13 @@ whole frame, tap the crop-to-the-box button beside the crop button (or press `C`
 again), or untick *Crop to the box* in ⋯ Settings: either way the whole frame shows until it is ticked
 again or the video is opened again. *Remove crop*
 and *Reset* are there too.
+
+**At a high speed.** At 4× the video has to come down the connection four times as fast; when it can't
+keep up, the player stops for a moment to load, and **Loading…** shows at the bottom of the video until
+it goes on by itself. If the player stands still for 6 s although it has what it needs (players can get
+stuck like that at a high speed), the app starts it again with a tiny seek. The next lecture is fetched
+ahead only once the one playing has loaded enough to play on (or after 8 s), so that it doesn't take
+the connection from it.
 
 **Messages.** A message (*Resumed at…*, a file hidden, a lecture no longer important…) goes after a
 few seconds, or at once with its ×. In the player it shows at the top left, over the video, clear of
