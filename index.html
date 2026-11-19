@@ -7,7 +7,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Karaoke">
-<meta name="app-version" content="3.6.0">
+<meta name="app-version" content="3.7.0">
 <meta name="description" content="Plays your lecture videos and audio recordings, from your device or your Dropbox, with live karaoke subtitles from their Soniox transcripts; new ones get transcribed on GitHub.">
 <title>Lecture Karaoke</title>
 <link rel="manifest" href="manifest.webmanifest">
@@ -74,7 +74,9 @@
     <!-- A recording shows its cover art here, or bars that move with the sound (app.js setLook). -->
     <div id="cover" class="cover" hidden><img id="coverBack" class="cover-back" alt="" draggable="false"><img id="coverArt" class="cover-art" alt="" draggable="false"></div>
     <canvas id="viz" class="viz" hidden></canvas>
-    <div id="flash" class="flash" aria-hidden="true"></div></div>
+    <div id="flash" class="flash" aria-hidden="true"></div>
+    <!-- The crop box, over the whole picture while it is drawn (app.js, the picture): drag it, a side, a corner, or across the picture. -->
+    <div id="cropLayer" class="crop-layer" hidden><div id="cropBox" class="crop-box"><i data-h="n"></i><i data-h="s"></i><i data-h="w"></i><i data-h="e"></i><i data-h="nw"></i><i data-h="ne"></i><i data-h="sw"></i><i data-h="se"></i></div></div></div>
   <div id="panel" class="panel">
     <div id="prev" class="ctx prev"></div>
     <div id="cur" class="cur"></div>
@@ -82,6 +84,18 @@
     <div id="splitter" class="splitter" title="Drag to resize the video and the subtitles (double-click: automatic)"></div>
     <!-- While the video has no transcript: what is happening, and what can be done. -->
     <div id="waitBox" class="get wait" role="status" hidden></div>
+    <!-- While the crop box is drawn: rotate, flip, the whole frame, cancel (the bar's crop button, now ✓, crops to the box). -->
+    <div id="cropTools" class="crop-tools" hidden>
+      <p class="crop-hint">Drag the box, its sides or corners, or drag across the picture for a new box. Tap ✓ in the bar to crop.</p>
+      <div class="crop-buttons">
+        <button type="button" id="cropTurnLeft" aria-label="Rotate left" title="Rotate left">↺</button>
+        <button type="button" id="cropTurnRight" aria-label="Rotate right" title="Rotate right">↻</button>
+        <button type="button" id="cropFlipH" aria-pressed="false" aria-label="Flip left to right" title="Flip left to right">⇋</button>
+        <button type="button" id="cropFlipV" aria-pressed="false" aria-label="Flip top to bottom" title="Flip top to bottom">⇵</button>
+        <button type="button" id="cropWhole">Whole frame</button>
+        <button type="button" id="cropCancel">Cancel</button>
+      </div>
+    </div>
   </div>
   <!-- Two rows, filled from the viewer's arrangement (app.js renderBar); parts not shown wait in barParts. -->
   <div class="bar" id="bar">
@@ -123,6 +137,8 @@
       <button id="lockBtn" class="icon" data-el="lock" aria-label="Lock the screen against touches"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 11V8a4 4 0 0 1 8 0v3" fill="none" stroke="currentColor" stroke-width="2.2"/><rect x="5" y="11" width="14" height="10" rx="2.5" fill="currentColor"/></svg></button>
       <!-- The lecture's star (app.js, drawThisLecture): filled while important, a tap switches it. -->
       <button id="starBtn" class="icon star" data-el="important" aria-pressed="true" aria-label="Important" disabled></button>
+      <!-- Crops the picture to a box drawn over it (app.js, the picture); it sits beside the file name, with the hide button. -->
+      <button id="cropBtn" class="icon crop" data-el="crop" aria-pressed="false" aria-label="Crop" disabled></button>
       <!-- Takes the open lecture off the library's list, or puts it back (app.js, drawThisLecture); it sits beside the file name. -->
       <button id="hideBtn" class="icon hide" data-el="hide" aria-pressed="false" aria-label="Hide from the list" disabled></button>
       <button id="fsBtn" class="icon" data-el="fullscreen" aria-label="Full screen">⛶</button>
@@ -228,6 +244,21 @@
       <input type="range" id="split" min="15" max="85" step="1">
       <div class="row"><p class="small">Portrait and landscape are set separately. You can also drag the handle between the video and the subtitles.</p>
         <button type="button" id="splitReset">Automatic</button></div>
+    </fieldset>
+    <fieldset id="viewSet" class="lecture-only" hidden>
+      <legend>Video picture</legend>
+      <div class="view-buttons">
+        <button type="button" id="turnLeft">↺ Rotate left</button>
+        <button type="button" id="turnRight">↻ Rotate right</button>
+        <button type="button" id="flipH" aria-pressed="false">⇋ Flip left to right</button>
+        <button type="button" id="flipV" aria-pressed="false">⇵ Flip top to bottom</button>
+      </div>
+      <div class="row view-crop">
+        <label class="check"><input type="checkbox" id="viewCrop" disabled> Crop to the box</label>
+        <button type="button" id="cropRemove" disabled>Remove crop</button>
+      </div>
+      <p class="small">The crop button beside the file name draws the box. Unticked, the whole frame shows until the video is opened again.</p>
+      <div class="row"><p class="small" id="viewSays"></p><button type="button" id="viewReset" disabled>Reset</button></div>
     </fieldset>
     <fieldset>
       <legend>Highlight</legend>

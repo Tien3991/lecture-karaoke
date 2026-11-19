@@ -22,7 +22,7 @@ import { applyNoteChanges, newNoteId, noteStamp, shownNotes } from "./core/notes
 import * as store from "./core/store.js";
 import { zipFiles } from "./core/zip.js";
 
-const VERSION = "3.6.0";
+const VERSION = "3.7.0";
 // Proportions of the burned vertical video (identical in every pipeline calibration), in em of
 // the main subtitle text: line limit, frame width, and the height the three blocks need.
 const FIT_EM = 892.4 / 67.797, FRAME_EM = 1080 / 67.797, PANEL_EM = 14.4, CTX_SCALE = 74 / 93;
@@ -58,7 +58,7 @@ try {
 
 const $ = (id) => document.getElementById(id);
 const clamp = (x, lo, hi) => Math.min(hi, Math.max(lo, x));
-const video = $("video"), panel = $("panel"), player = $("player"), bar = document.querySelector(".bar");
+const video = $("video"), videoBox = video.parentElement, panel = $("panel"), player = $("player"), bar = document.querySelector(".bar");
 const S = {
   videoFile: null, jsonFile: null, picked: null, wanted: null, videoUrl: null, videoName: "", transcript: null,
   id: null, rec: {}, repoKey: null, baseWords: [], words: [], pieces: [], events: [], durationMs: 0, audioOffsetMs: 0,
@@ -1232,6 +1232,8 @@ function showVideo(picked, resumeAt = 0) {
   draftAt = null;
   corsFor(picked);
   video.src = S.videoUrl;
+  loadView();   // rotated, flipped, cropped as kept for it (laid out once its size is known)
+  applyView();
   loadBg();
   applyRate(folderRate(S.folder), false);
   $("welcome").hidden = true;
@@ -1239,6 +1241,7 @@ function showVideo(picked, resumeAt = 0) {
   document.title = `${name.replace(/\.[^.]+$/, "")} · Lecture Karaoke`;
   $("barTitle").textContent = $("barTitle").title = name;
   updateChips();
+  drawView();
   layout();
   resize();
   setLook();
@@ -1797,6 +1800,209 @@ splitter.addEventListener("pointerdown", (e) => {
 });
 splitter.addEventListener("dblclick", () => { setSplit(null); savePrefs(); });
 
+// ---------------------------------------------------------------- the picture: rotated, flipped, cropped
+// Some videos were recorded on their side: ⋯ Settings → Video picture rotates the picture a quarter
+// turn at a time and flips it (left to right, top to bottom), as seen. The bar's crop button (beside
+// the hide button) draws a box over the whole picture: drag the box, its sides or its corners, or drag
+// across the picture for a new one; a second tap on the button crops to it. Rotate and flip are there
+// too, and Cancel leaves things as they were. Kept on this device for each video (by its fingerprint)
+// from one session to the next. Settings can leave the crop out for now: the whole frame shows until
+// the video is opened again. Only a rotated, flipped or cropped picture is laid out here; otherwise the
+// video fills its box as before.
+const VIEWS_KEY = "lecture-karaoke.views", FULL_FRAME = [0, 0, 1, 1], MIN_CROP = 0.08;
+let view = { rot: 0, fh: false, fv: false, crop: null };   // crop: [x, y, w, h] of the picture as seen (rotated and flipped), 0..1
+let wholeFrame = false;   // the crop left out for now
+let cropping = null;   // while the box is drawn: {box: [x, y, w, h], before: the view as it was}
+const plainView = (v) => !v.rot && !v.fh && !v.fv && !v.crop;
+/** What the view is kept by: the video's fingerprint (the same video streamed or on the device). */
+function viewKey(p = S.picked) {
+  if (!p) return null;
+  return p.fingerprint || (p.dropbox?.hash ? `dbx:${p.dropbox.hash}` : `file:${p.file?.name ?? p.name}:${p.file?.size ?? p.size}`);
+}
+function storedViews() {
+  try { return JSON.parse(localStorage.getItem(VIEWS_KEY) || "{}") || {}; } catch { return {}; }
+}
+/** A crop that is possible (at least MIN_CROP each way, within the picture), or null for the whole frame. */
+function cleanCrop(c) {
+  if (!Array.isArray(c) || c.length !== 4 || !c.every(Number.isFinite)) return null;
+  const w = clamp(c[2], MIN_CROP, 1), h = clamp(c[3], MIN_CROP, 1);
+  return w > 0.995 && h > 0.995 ? null : [clamp(c[0], 0, 1 - w), clamp(c[1], 0, 1 - h), w, h];
+}
+/** The open video's view, as kept for it (a new video opens with its crop shown, not the box). */
+function loadView() {
+  const v = storedViews()[viewKey()] || {};
+  view = { rot: [90, 180, 270].includes(v.rot) ? v.rot : 0, fh: !!v.fh, fv: !!v.fv, crop: cleanCrop(v.crop) };
+  wholeFrame = false;
+  endCropping();
+}
+function keepView() {
+  const key = viewKey();
+  if (!key) return;
+  const all = storedViews();
+  if (plainView(view)) delete all[key];
+  else all[key] = { ...view, name: S.videoName, at: Date.now() };
+  try { localStorage.setItem(VIEWS_KEY, JSON.stringify(all)); } catch { /* not kept */ }
+}
+/** Rotates the picture a quarter turn as seen (1: clockwise, -1: the other way) or flips it as seen
+ *  ("h": left to right, "v": top to bottom). The crop (and the box being drawn) goes with it, so that
+ *  it keeps the same part of the picture. Kept at once, unless the box is being drawn (the crop
+ *  button keeps it, Cancel undoes it). */
+function turnView(how) {
+  const move = (r) => {
+    if (!r) return r;
+    const [x, y, w, h] = r;
+    return how === 1 ? [1 - y - h, x, h, w] : how === -1 ? [y, 1 - x - w, h, w] : how === "h" ? [1 - x - w, y, w, h] : [x, 1 - y - h, w, h];
+  };
+  if (how === "h") view.fh = !view.fh;
+  else if (how === "v") view.fv = !view.fv;
+  else view.rot = (view.rot + (view.fh !== view.fv ? -how : how) * 90 + 360) % 360;   // after one flip, a turn goes the other way
+  view.crop = move(view.crop);
+  if (cropping) cropping.box = move(cropping.box);
+  else keepView();
+  applyView();
+  drawView();
+}
+/** Lays the picture out in its box: rotated and flipped, and its crop as large as the box allows,
+ *  in its middle. While the box is drawn, the whole picture shows, with the box over it. */
+function applyView() {
+  const bw = videoBox.clientWidth, bh = videoBox.clientHeight, vw = video.videoWidth, vh = video.videoHeight;
+  const picture = !player.hidden && hasPicture() && vw > 0 && vh > 0 && bw > 0 && bh > 0;
+  const crop = cropping || wholeFrame ? null : view.crop;
+  const custom = picture && !!(cropping || view.rot || view.fh || view.fv || crop);
+  videoBox.classList.toggle("turned", custom);
+  $("cropLayer").hidden = !(custom && cropping);
+  if (!custom) {
+    for (const k of ["position", "left", "top", "width", "height", "objectFit", "transform", "clipPath", "webkitClipPath"]) video.style[k] = "";
+    return;
+  }
+  const turned = view.rot % 180 !== 0, fw = turned ? vh : vw, fh = turned ? vw : vh;   // the picture as seen
+  const [cx, cy, cw, ch] = crop || FULL_FRAME;
+  const s = Math.min(bw / (cw * fw), bh / (ch * fh));
+  const midX = bw / 2 + (0.5 - cx - cw / 2) * fw * s, midY = bh / 2 + (0.5 - cy - ch / 2) * fh * s;   // the picture's middle
+  const pct = (v) => `${(v * 100).toFixed(3)}%`, [lx, ly, lw, lh] = crop ? unturned(crop) : FULL_FRAME;
+  const clip = crop ? `inset(${pct(ly)} ${pct(1 - lx - lw)} ${pct(1 - ly - lh)} ${pct(lx)})` : "";   // only the crop shows
+  Object.assign(video.style, {
+    position: "absolute", left: `${midX - (vw * s) / 2}px`, top: `${midY - (vh * s) / 2}px`, width: `${vw * s}px`, height: `${vh * s}px`,
+    objectFit: "fill", transform: `scale(${view.fh ? -1 : 1}, ${view.fv ? -1 : 1}) rotate(${view.rot}deg)`, clipPath: clip, webkitClipPath: clip,
+  });
+  if (cropping) {
+    Object.assign($("cropLayer").style, { left: `${midX - (fw * s) / 2}px`, top: `${midY - (fh * s) / 2}px`, width: `${fw * s}px`, height: `${fh * s}px` });
+    drawCropBox();
+  }
+}
+/** A rectangle of the picture as seen, in the video's own terms (before it is rotated and flipped). */
+function unturned([x, y, w, h]) {
+  if (view.fh) x = 1 - x - w;
+  if (view.fv) y = 1 - y - h;
+  for (let k = 0; k < view.rot / 90; k++) [x, y, w, h] = [y, 1 - x - w, h, w];   // a quarter turn back
+  return [x, y, w, h];
+}
+new ResizeObserver(() => applyView()).observe(videoBox);
+video.addEventListener("loadedmetadata", () => { applyView(); drawView(); });
+function drawCropBox() {
+  const [x, y, w, h] = cropping.box;
+  Object.assign($("cropBox").style, { left: `${x * 100}%`, top: `${y * 100}%`, width: `${w * 100}%`, height: `${h * 100}%` });
+}
+/** The bar's crop button: draw the box over the whole picture, or (the second tap) crop to it. */
+function cropTap() {
+  if (player.hidden || !hasPicture()) return;
+  if (!cropping) {
+    cropping = { box: [...(view.crop || FULL_FRAME)], before: structuredClone(view) };
+    $("cropTools").hidden = false;
+  } else {
+    view.crop = cleanCrop(cropping.box);
+    wholeFrame = false;
+    endCropping();
+    keepView();
+  }
+  applyView();
+  drawView();
+}
+/** Cancel: the view as it was before the box was drawn. */
+function cancelCropping() {
+  if (!cropping) return;
+  view = cropping.before;
+  endCropping();
+  applyView();
+  drawView();
+}
+function endCropping() {
+  cropping = null;
+  $("cropTools").hidden = true;
+}
+const CROP_SVG = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 2.5v13a2 2 0 0 0 2 2h13M2.5 6.5h13a2 2 0 0 1 2 2v13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+const APPLY_SVG = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4.5 12.5l5 5 10-11" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+/** The crop button (lit while the picture is cropped; ✓ while the box is drawn) and ⋯ Settings → Video picture. */
+function drawView() {
+  const can = !player.hidden && !!S.picked && hasPicture(), b = $("cropBtn");
+  b.disabled = !can;
+  b.innerHTML = cropping ? APPLY_SVG : CROP_SVG;
+  b.setAttribute("aria-pressed", String(!!cropping || (!!view.crop && !wholeFrame)));
+  b.setAttribute("aria-label", cropping ? "Crop to the box" : "Crop");
+  b.title = cropping ? "Crop to the box" : !view.crop ? "Crop: draw a box on the picture"
+    : wholeFrame ? "Cropped, but the whole frame shows for now (⋯ Settings); tap to draw the box again" : "Cropped: tap to draw the box again";
+  $("viewSet").hidden = !can;
+  for (const id of ["flipH", "cropFlipH"]) $(id).setAttribute("aria-pressed", String(view.fh));
+  for (const id of ["flipV", "cropFlipV"]) $(id).setAttribute("aria-pressed", String(view.fv));
+  $("viewCrop").checked = !!view.crop && !wholeFrame;
+  $("viewCrop").disabled = !view.crop;
+  $("cropRemove").disabled = !view.crop;
+  $("viewReset").disabled = plainView(view);
+  const parts = [view.rot && `rotated ${view.rot}°`, view.fh && "flipped left to right", view.fv && "flipped top to bottom",
+    view.crop && (wholeFrame ? "cropped (the whole frame for now)" : "cropped")].filter(Boolean);
+  $("viewSays").textContent = `${parts.length ? `This video: ${parts.join(", ")}.` : "This video shows as it is."} Kept on this device for this video.`;
+}
+$("cropBtn").addEventListener("click", cropTap);
+$("cropWhole").addEventListener("click", () => { if (cropping) { cropping.box = [...FULL_FRAME]; drawCropBox(); } });
+$("cropCancel").addEventListener("click", cancelCropping);
+for (const [id, how] of [["turnLeft", -1], ["turnRight", 1], ["flipH", "h"], ["flipV", "v"],
+  ["cropTurnLeft", -1], ["cropTurnRight", 1], ["cropFlipH", "h"], ["cropFlipV", "v"]]) $(id).addEventListener("click", () => turnView(how));
+$("viewCrop").addEventListener("change", () => { wholeFrame = !$("viewCrop").checked; applyView(); drawView(); });
+$("cropRemove").addEventListener("click", () => { view.crop = null; wholeFrame = false; keepView(); applyView(); drawView(); });
+$("viewReset").addEventListener("click", () => {
+  view = { rot: 0, fh: false, fv: false, crop: null };
+  wholeFrame = false;
+  endCropping();
+  keepView();
+  applyView();
+  drawView();
+});
+// Drawing the box: drag it to move it, a side or a corner to resize it, or across the picture for a new one.
+$("cropLayer").addEventListener("pointerdown", (e) => {
+  if (!cropping || e.button > 0) return;
+  e.preventDefault();
+  const layer = $("cropLayer"), r = layer.getBoundingClientRect(), start = [...cropping.box];
+  const at = (ev) => [clamp((ev.clientX - r.left) / r.width, 0, 1), clamp((ev.clientY - r.top) / r.height, 0, 1)];
+  const [px, py] = at(e), part = e.target.dataset.h || (e.target === $("cropBox") ? "move" : "new");
+  const stop = new AbortController();
+  layer.setPointerCapture(e.pointerId);
+  layer.addEventListener("pointermove", (ev) => {
+    if (!cropping) return;
+    const [qx, qy] = at(ev), dx = qx - px, dy = qy - py;
+    let [x, y, w, h] = start;
+    if (part === "move") {
+      x = clamp(x + dx, 0, 1 - w);
+      y = clamp(y + dy, 0, 1 - h);
+    } else if (part === "new") {
+      if (Math.abs(dx) < 0.02 && Math.abs(dy) < 0.02) return;   // not a tap
+      w = Math.max(Math.abs(dx), MIN_CROP);
+      h = Math.max(Math.abs(dy), MIN_CROP);
+      x = clamp(dx < 0 ? px - w : px, 0, 1 - w);
+      y = clamp(dy < 0 ? py - h : py, 0, 1 - h);
+    } else {
+      let left = x, top = y, right = x + w, bottom = y + h;
+      if (part.includes("w")) left = clamp(x + dx, 0, right - MIN_CROP);
+      if (part.includes("e")) right = clamp(x + w + dx, left + MIN_CROP, 1);
+      if (part.includes("n")) top = clamp(y + dy, 0, bottom - MIN_CROP);
+      if (part.includes("s")) bottom = clamp(y + h + dy, top + MIN_CROP, 1);
+      [x, y, w, h] = [left, top, right - left, bottom - top];
+    }
+    cropping.box = [x, y, w, h];
+    drawCropBox();
+  }, { signal: stop.signal });
+  for (const end of ["pointerup", "pointercancel"]) layer.addEventListener(end, () => stop.abort(), { signal: stop.signal });
+});
+
 // ---------------------------------------------------------------- drawing
 function wordSpan(i, text) {
   const s = document.createElement("span");
@@ -2016,7 +2222,7 @@ video.addEventListener("pause", () => {
   keepAwake(false);
   save();
 });
-video.addEventListener("click", togglePlay);
+videoBox.addEventListener("click", () => { if (!cropping) togglePlay(); });   // also beside a turned or cropped picture
 $("seek").addEventListener("input", () => { if (video.duration) video.currentTime = ($("seek").value / 1000) * video.duration; });
 $("editBtn").addEventListener("click", () => setEditing(!S.editing));
 $("moreBtn").addEventListener("click", openSettings);
@@ -2053,6 +2259,7 @@ addEventListener("keydown", (e) => {
     if (how) { moveSelected(how); e.preventDefault(); } else if (k === "escape" || k === "enter") setArranging(false);
     return;
   }
+  if (cropping && k === "escape") { cancelCropping(); e.preventDefault(); return; }
   if (k === " ") { e.preventDefault(); togglePlay(); }
   else if (k === "arrowleft") skip(-5);
   else if (k === "arrowright") skip(5);
@@ -2083,12 +2290,12 @@ panel.addEventListener("click", (e) => {
 // Two rows of parts (data-el in index.html), arranged by the viewer and kept on this device:
 // Settings → Arrange the buttons, then tap a part and move it. Settings itself can't be hidden,
 // so the bar can always be arranged again.
-const BAR_DEFAULT = { rows: [["title", "hide", "progress", "highlight", "timing", "notes", "fix", "lock", "important", "endmode", "sleep", "fullscreen",
+const BAR_DEFAULT = { rows: [["title", "crop", "hide", "progress", "highlight", "timing", "notes", "fix", "lock", "important", "endmode", "sleep", "fullscreen",
   "settings"], ["back", "previous", "rewind", "play", "forward", "next", "speed"]], hidden: [] };
 const BAR_LABELS = { progress: "Progress bar", highlight: "Soft highlight", lock: "Lock", back: "Back", rewind: "−5s", play: "Play",
   forward: "+5s", speed: "Speed", timing: "Timing", fix: "Fix", settings: "Settings", fullscreen: "Full screen", notes: "Notes",
   previous: "Previous lecture", next: "Next lecture", endmode: "End mode", sleep: "Sleep timer", important: "Important", title: "File name",
-  hide: "Hide from the list" };
+  hide: "Hide from the list", crop: "Crop" };
 // Kept here, not looked up: a part taken out of the bar is detached for a moment and couldn't be found.
 const PARTS = new Map([...bar.querySelectorAll("[data-el]")].map((el) => [el.dataset.el, el]));
 const barPart = (id) => PARTS.get(id);
@@ -3167,6 +3374,7 @@ function openSettings() {
   drawFixList();
   drawTranscriptLinks();
   drawThisLecture();
+  drawView();
   $("hideAfter").value = String(prefs.hideAfter);
   $("hideWithin").value = String(prefs.hideWithin);
   $("hideWithin").disabled = !prefs.hideAfter;
@@ -3205,6 +3413,7 @@ $("language").addEventListener("change", () => { S.language = $("language").valu
 function goHome() {
   if ($("settings").open) $("settings").close();
   setNotesOpen(false);
+  cancelCropping();
   scope = null;
   if (arranging) setArranging(false);
   if (!lockLayer.hidden) setLocked(false);
@@ -3381,17 +3590,27 @@ async function keepAwake(on) {
   } catch { /* not allowed here: fine */ }
 }
 
+/** A message for a few seconds (ms), with a button for an action if given, and × to close it at once.
+ *  In the player it shows at the top left, clear of the bar. */
 function toast(text, actionLabel, action, ms = 5000) {
   const t = $("toast");
-  t.replaceChildren(text);
+  t.replaceChildren(Object.assign(document.createElement("span"), { className: "toast-text", textContent: text }));
   if (actionLabel) {
-    const b = Object.assign(document.createElement("button"), { textContent: actionLabel });
-    b.addEventListener("click", () => { action(); t.hidden = true; });
+    const b = Object.assign(document.createElement("button"), { type: "button", textContent: actionLabel });
+    b.addEventListener("click", () => { action(); closeToast(); });
     t.append(b);
   }
+  const x = Object.assign(document.createElement("button"), { type: "button", className: "toast-close", textContent: "×", title: "Close" });
+  x.setAttribute("aria-label", "Close the message");
+  x.addEventListener("click", closeToast);
+  t.append(x);
   t.hidden = false;
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => (t.hidden = true), ms);
+  toastTimer = setTimeout(closeToast, ms);
+}
+function closeToast() {
+  clearTimeout(toastTimer);
+  $("toast").hidden = true;
 }
 
 // ---------------------------------------------------------------- start-up
@@ -3426,7 +3645,8 @@ if (dev) {
     get stream() { return stream; }, get transfer() { return transfer; }, get audioGraph() { return audioGraph; },
     bg, get bgOn() { return bgOn; }, get scope() { return scope; }, get endMode() { return endMode; },
     get upNext() { return upNext; }, ahead, links, get coming() { return coming; }, get endAway() { return endAway; },
-    get endSeen() { return endSeen; }, lectureEnded, nextOnReturn };   // for checks
+    get endSeen() { return endSeen; }, lectureEnded, nextOnReturn, get view() { return view; }, get cropping() { return cropping; },
+    get wholeFrame() { return wholeFrame; }, applyView, toast };   // for checks
   const q = new URLSearchParams(location.search);
   // ?pick=URL: as if that file had been picked on this device
   if (q.get("pick")) {
