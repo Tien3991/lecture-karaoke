@@ -241,15 +241,13 @@ body.dragging .welcome { outline: 3px dashed var(--hi); outline-offset: -10px; }
 .bar .icon.star[aria-pressed] { background: var(--ui); color: var(--fg); border-color: var(--line); }
 .bar .icon.star[aria-pressed="true"] path { fill: currentColor; }
 .bar .icon.star[aria-pressed="false"] { color: var(--dim); }
-/* the file name: a long one takes up to three lines */
-.bar-title { flex: 1 1 100%; min-width: 0; overflow: hidden; text-align: center; font-size: 13px; line-height: 1.3; color: var(--dim);
-  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow-wrap: anywhere; }
-/* the crop and hide buttons beside the file name (where the bar has them at first): the name leaves them
-   room on its line(s), and they stay small, so that the line stays low */
-.bar-title:has(+ .hide), .bar-title:has(+ .crop) { flex-basis: calc(100% - 56px); }
-.bar-title:has(+ .crop + .hide), .bar-title:has(+ .hide + .crop) { flex-basis: calc(100% - 104px); }
-.bar .bar-title + :is(.hide, .crop), .bar .bar-title + :is(.hide, .crop) + :is(.hide, .crop) { min-width: 40px; padding: 3px 8px; }
-.bar .bar-title + :is(.hide, .crop) svg, .bar .bar-title + :is(.hide, .crop) + :is(.hide, .crop) svg { width: 16px; height: 16px; }
+/* the file name: a long one takes up to three lines. The crop, crop-to-the-box and hide buttons right
+   after it (where the bar has them at first) share its line: app.js marks them beside-title and sets
+   --beside to how many show; they stay small, so that the line stays low. */
+.bar-title { flex: 1 1 calc(100% - var(--beside, 0) * 48px); min-width: 0; overflow: hidden; text-align: center; font-size: 13px; line-height: 1.3;
+  color: var(--dim); display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow-wrap: anywhere; }
+.bar .icon.beside-title { min-width: 40px; padding: 3px 8px; }   /* over the narrow-screen sizes below */
+.bar .icon.beside-title svg { width: 16px; height: 16px; }
 .progress { flex: 1 1 160px; display: flex; align-items: center; gap: 8px; min-width: 0; }
 .progress input[type=range] { flex: 1; min-width: 60px; accent-color: var(--hi); }
 .time { font-variant-numeric: tabular-nums; font-size: 13px; color: var(--dim); white-space: nowrap; }

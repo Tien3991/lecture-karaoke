@@ -7,7 +7,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Karaoke">
-<meta name="app-version" content="3.7.0">
+<meta name="app-version" content="3.7.1">
 <meta name="description" content="Plays your lecture videos and audio recordings, from your device or your Dropbox, with live karaoke subtitles from their Soniox transcripts; new ones get transcribed on GitHub.">
 <title>Lecture Karaoke</title>
 <link rel="manifest" href="manifest.webmanifest">
@@ -139,6 +139,8 @@
       <button id="starBtn" class="icon star" data-el="important" aria-pressed="true" aria-label="Important" disabled></button>
       <!-- Crops the picture to a box drawn over it (app.js, the picture); it sits beside the file name, with the hide button. -->
       <button id="cropBtn" class="icon crop" data-el="crop" aria-pressed="false" aria-label="Crop" disabled></button>
+      <!-- For a cropped video: lit while cropped to the box; a tap shows the whole frame for now, another crops again (app.js drawView). -->
+      <button id="peekBtn" class="icon peek" data-el="peek" aria-pressed="true" aria-label="Crop to the box" hidden></button>
       <!-- Takes the open lecture off the library's list, or puts it back (app.js, drawThisLecture); it sits beside the file name. -->
       <button id="hideBtn" class="icon hide" data-el="hide" aria-pressed="false" aria-label="Hide from the list" disabled></button>
       <button id="fsBtn" class="icon" data-el="fullscreen" aria-label="Full screen">⛶</button>

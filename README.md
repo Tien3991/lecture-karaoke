@@ -48,7 +48,7 @@ streams again; for a file on the device a browser can't reopen it by itself, so 
 the file picker (its Recents has the video).
 
 The control bar has two rows: by default the lecture's file name (on a line of its own, up to three lines
-for a long one, with the crop and hide buttons at its end), the progress bar (on a phone held upright, on a line of its own too), **Soft**, **Exact**, notes, **Fix**, the lock,
+for a long one, with the crop, crop-to-the-box and hide buttons at its end), the progress bar (on a phone held upright, on a line of its own too), **Soft**, **Exact**, notes, **Fix**, the lock,
 the star, the end mode, the sleep timer, full screen and ⋯ on top, and back, previous lecture, −5s,
 play, +5s, next lecture and the speed below. ⋯ Settings → *Arrange the buttons* lets you move any button left or right or to
 the other row, or hide it (tap a button, then move it); the arrangement is kept on the device. A
@@ -67,7 +67,8 @@ button added in a later release appears where the default bar has it.
 | lock | lock the screen against touches while the lecture plays: nothing under it reacts, and the bar dims. A touch shows *Slide to unlock*: slide the lock all the way to the right and let go there (stopping short, or wandering off the track, leaves it locked). Above it, the dimmer lays black over the screen: a swipe along it to the left darkens it, all the way to black, and to the right lightens it again (the knob moves as far as the finger; a tap changes nothing; kept on the device for the next lock; it never unlocks). The keyboard still works; on the lock's slider, → moves it a quarter at a time, and on the dimmer ←/→ darken or lighten it a tenth |
 | `Fix` | tap a word to correct it (synced through GitHub when connected) |
 | notes (page icon) | notes on the lecture, below |
-| crop (beside the file name) | crops the picture: a tap draws a box over the whole picture (drag the box, its sides or its corners, or drag across the picture for a new box; rotate and flip are there too, and *Cancel* leaves things as they were); the button shows ✓, and a second tap crops to the box. Lit while the picture is cropped. Kept on this device for this video. See below |
+| crop (beside the file name) | crops the picture: a tap draws a box over the whole picture (drag the box, its sides or its corners, or drag across the picture for a new box; rotate and flip are there too, and *Cancel* leaves things as they were); the button shows ✓, and a second tap crops to the box. Kept on this device for this video. See below |
+| crop to the box (a box inside a dashed frame, beside the crop button) | only for a cropped video: lit while it is cropped to the box; a tap shows the whole frame for a quick look, another crops it again (or `C`). The same as *Crop to the box* in ⋯ Settings; the crop is back when the video is opened again |
 | hide (crossed-out eye, beside the file name) | takes the lecture off the library's list, on every device (`hidden.json`), as hide mode's eye does there, with *Undo* for 3 seconds; it plays on, and ⏮/⏭ go on from it. Lit while the lecture is off the list; a tap puts it back. For lectures in the Dropbox library |
 | star | whether the lecture is important: filled while it is (as every lecture is at first), an outline while it isn't; a tap switches it, on every device (`unimportant.json`). *Play by tag* leaves out the lectures that aren't important. For lectures in the Dropbox library |
 | `⋯` | settings: links to the transcript, timing offset, sync fine-tune (±300 ms), layout, the video picture (rotate, flip, crop), highlight, control bar, GitHub, language, the list of fixes, export |
@@ -75,7 +76,7 @@ button added in a later release appears where the default bar has it.
 | sleep (moon) | sleep timer: playback pauses after the minutes chosen (a preset, or type them); lit while it runs (no message), and the dialog says how long is left |
 | `⛶` | full screen, where the browser allows it (not iPhone) |
 | handle between video and subtitles | drag to resize them; portrait and landscape are kept separately (double-click, or ⋯ Settings → Automatic, to reset) |
-| keyboard | space play/pause, ←/→ 5 s, ↑/↓ preset speeds, `−`/`+` 0.05× slower/faster, `L` offset, `H` soft highlight, `E` fix, `N` notes, `F` full screen |
+| keyboard | space play/pause, ←/→ 5 s, ↑/↓ preset speeds, `−`/`+` 0.05× slower/faster, `L` offset, `H` soft highlight, `E` fix, `N` notes, `C` crop to the box or the whole frame, `F` full screen |
 
 The app remembers, per transcript, where you stopped, the sync fine-tune, the language and your
 fixes. A lecture you pick (in the library, the recent list or a *Play by tag* list, or with a
@@ -114,8 +115,9 @@ The crop button beside the file name crops it to a box you draw: the picture the
 as large as the video area allows (black around it); the box keeps the same part of the picture when
 it is rotated or flipped afterwards. Rotation, flips and crop are kept on this device for each video
 (by its fingerprint, so a copy of it too), and come back when it is opened again. For a look at the
-whole frame, tap the crop button (the whole picture shows with the box over it) and *Cancel*; or untick
-*Crop to the box* in ⋯ Settings: the whole frame shows until the video is opened again. *Remove crop*
+whole frame, tap the crop-to-the-box button beside the crop button (or press `C`; tap it again to crop
+again), or untick *Crop to the box* in ⋯ Settings: either way the whole frame shows until it is ticked
+again or the video is opened again. *Remove crop*
 and *Reset* are there too.
 
 **Messages.** A message (*Resumed at…*, a file hidden, a lecture no longer important…) goes after a

@@ -22,7 +22,7 @@ import { applyNoteChanges, newNoteId, noteStamp, shownNotes } from "./core/notes
 import * as store from "./core/store.js";
 import { zipFiles } from "./core/zip.js";
 
-const VERSION = "3.7.0";
+const VERSION = "3.7.1";
 // Proportions of the burned vertical video (identical in every pipeline calibration), in em of
 // the main subtitle text: line limit, frame width, and the height the three blocks need.
 const FIT_EM = 892.4 / 67.797, FRAME_EM = 1080 / 67.797, PANEL_EM = 14.4, CTX_SCALE = 74 / 93;
@@ -1937,10 +1937,16 @@ function drawView() {
   const can = !player.hidden && !!S.picked && hasPicture(), b = $("cropBtn");
   b.disabled = !can;
   b.innerHTML = cropping ? APPLY_SVG : CROP_SVG;
-  b.setAttribute("aria-pressed", String(!!cropping || (!!view.crop && !wholeFrame)));
+  b.setAttribute("aria-pressed", String(!!cropping));
   b.setAttribute("aria-label", cropping ? "Crop to the box" : "Crop");
-  b.title = cropping ? "Crop to the box" : !view.crop ? "Crop: draw a box on the picture"
-    : wholeFrame ? "Cropped, but the whole frame shows for now (⋯ Settings); tap to draw the box again" : "Cropped: tap to draw the box again";
+  b.title = cropping ? "Crop to the box" : !view.crop ? "Crop: draw a box on the picture" : "Cropped: tap to draw the box again";
+  // the bar's crop to the box (Settings has it too): lit while cropped; a tap shows the whole frame, another crops again
+  const pk = $("peekBtn"), peekable = can && !!view.crop && !cropping;
+  pk.hidden = !peekable && !arranging;   // only for a cropped video (and while the bar is arranged)
+  pk.disabled = !peekable && !arranging;
+  pk.setAttribute("aria-pressed", String(!!view.crop && !wholeFrame));
+  pk.title = !view.crop ? "Crop to the box: for a cropped video" : wholeFrame ? "The whole frame for now (tap: crop to the box again)" : "Cropped to the box (tap: the whole frame for now)";
+  fitTitleLine();
   $("viewSet").hidden = !can;
   for (const id of ["flipH", "cropFlipH"]) $(id).setAttribute("aria-pressed", String(view.fh));
   for (const id of ["flipV", "cropFlipV"]) $(id).setAttribute("aria-pressed", String(view.fv));
@@ -1953,6 +1959,14 @@ function drawView() {
   $("viewSays").textContent = `${parts.length ? `This video: ${parts.join(", ")}.` : "This video shows as it is."} Kept on this device for this video.`;
 }
 $("cropBtn").addEventListener("click", cropTap);
+const PEEK_SVG = `<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2.5" y="4.5" width="19" height="15" rx="2" fill="none" stroke="currentColor" stroke-width="1.7" stroke-dasharray="2.6 2.2"/><rect x="7.5" y="9" width="9" height="6" rx="1" fill="currentColor"/></svg>`;
+$("peekBtn").innerHTML = PEEK_SVG;
+$("peekBtn").addEventListener("click", () => {
+  if (!view.crop || cropping) return;
+  wholeFrame = !wholeFrame;   // for now: the crop is back when the video is opened again
+  applyView();
+  drawView();
+});
 $("cropWhole").addEventListener("click", () => { if (cropping) { cropping.box = [...FULL_FRAME]; drawCropBox(); } });
 $("cropCancel").addEventListener("click", cancelCropping);
 for (const [id, how] of [["turnLeft", -1], ["turnRight", 1], ["flipH", "h"], ["flipV", "v"],
@@ -2271,6 +2285,7 @@ addEventListener("keydown", (e) => {
   else if (k === "h") $("hiBtn").click();
   else if (k === "e") $("editBtn").click();
   else if (k === "n") $("notesBtn").click();
+  else if (k === "c" && !$("peekBtn").hidden && !$("peekBtn").disabled) $("peekBtn").click();
   else if (k === "f" && canFullscreen) $("fsBtn").click();
   else return;
   e.preventDefault();
@@ -2290,12 +2305,14 @@ panel.addEventListener("click", (e) => {
 // Two rows of parts (data-el in index.html), arranged by the viewer and kept on this device:
 // Settings → Arrange the buttons, then tap a part and move it. Settings itself can't be hidden,
 // so the bar can always be arranged again.
-const BAR_DEFAULT = { rows: [["title", "crop", "hide", "progress", "highlight", "timing", "notes", "fix", "lock", "important", "endmode", "sleep", "fullscreen",
+const BAR_DEFAULT = { rows: [["title", "crop", "peek", "hide", "progress", "highlight", "timing", "notes", "fix", "lock", "important", "endmode", "sleep", "fullscreen",
   "settings"], ["back", "previous", "rewind", "play", "forward", "next", "speed"]], hidden: [] };
 const BAR_LABELS = { progress: "Progress bar", highlight: "Soft highlight", lock: "Lock", back: "Back", rewind: "−5s", play: "Play",
   forward: "+5s", speed: "Speed", timing: "Timing", fix: "Fix", settings: "Settings", fullscreen: "Full screen", notes: "Notes",
   previous: "Previous lecture", next: "Next lecture", endmode: "End mode", sleep: "Sleep timer", important: "Important", title: "File name",
-  hide: "Hide from the list", crop: "Crop" };
+  hide: "Hide from the list", crop: "Crop", peek: "Crop to the box" };
+/** The small buttons that may follow the file name in its row and share its line. */
+const TITLE_MATES = new Set(["crop", "peek", "hide"]);
 // Kept here, not looked up: a part taken out of the bar is detached for a moment and couldn't be found.
 const PARTS = new Map([...bar.querySelectorAll("[data-el]")].map((el) => [el.dataset.el, el]));
 const barPart = (id) => PARTS.get(id);
@@ -2333,7 +2350,20 @@ function renderBar() {
     }));
     $("hiddenRow").hidden = !hidden.length;
   }
+  fitTitleLine();
   layout();
+}
+/** The crop, crop-to-the-box and hide buttons right after the file name share its line: they are drawn
+ *  small (beside-title), and the name leaves room for the ones shown (--beside). */
+function fitTitleLine() {
+  const t = $("barTitle");
+  for (const el of bar.querySelectorAll(".beside-title")) el.classList.remove("beside-title");
+  let n = 0;
+  for (let el = t.nextElementSibling; el && TITLE_MATES.has(el.dataset.el); el = el.nextElementSibling) {
+    el.classList.add("beside-title");
+    if (!el.hidden) n++;
+  }
+  t.style.setProperty("--beside", String(n));
 }
 function setArranging(on) {
   arranging = on;
@@ -2341,6 +2371,7 @@ function setArranging(on) {
   player.classList.toggle("arranging", on);
   $("arrange").hidden = !on;
   renderBar();
+  drawView();   // the crop-to-the-box button shows while arranging, to be moved
 }
 function saveBar(cfg) {
   prefs.bar = cfg;
